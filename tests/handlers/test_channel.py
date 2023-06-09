@@ -6,7 +6,6 @@ import synapse
 
 from synapse.server import HomeServer
 from synapse.util import Clock
-from synapse.types import create_requester
 
 from synapse.rest.client import room
 from synapse.rest.client import login

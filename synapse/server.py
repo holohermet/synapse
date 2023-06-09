@@ -75,6 +75,11 @@ from synapse.handlers.pagination import PaginationHandler
 from synapse.handlers.password_policy import PasswordPolicyHandler
 from synapse.handlers.permissions import PermissionsListHandler
 from synapse.handlers.news import NewsCreatingHandler, NewsModificationHandler
+from synapse.handlers.polls import (
+    PollCreatingHandler,
+    PollWorkingHandler,
+    ListPollsHandler,
+)
 from synapse.handlers.presence import (
     BasePresenceHandler,
     PresenceHandler,
@@ -153,7 +158,6 @@ if TYPE_CHECKING:
     from synapse.handlers.oidc import OidcHandler
     from synapse.handlers.saml import SamlHandler
 
-
 # The annotation for `cache_in_self` used to be
 #     def (builder: Callable[["HomeServer"],T]) -> Callable[["HomeServer"],T]
 # which mypy was happy with.
@@ -192,7 +196,7 @@ def cache_in_self(builder: F) -> F:
         )
 
     # get_attr -> _attr
-    depname = builder.__name__[len("get") :]
+    depname = builder.__name__[len("get"):]
 
     building = [False]
 
@@ -861,6 +865,18 @@ class HomeServer(metaclass=abc.ABCMeta):
     @cache_in_self
     def get_news_working_handler(self) -> NewsModificationHandler:
         return NewsModificationHandler(self)
+
+    @cache_in_self
+    def get_poll_creating_handler(self) -> PollCreatingHandler:
+        return PollCreatingHandler(self)
+
+    @cache_in_self
+    def get_poll_working_handler(self) -> PollWorkingHandler:
+        return PollWorkingHandler(self)
+
+    @cache_in_self
+    def get_poll_list_handler(self) -> ListPollsHandler:
+        return ListPollsHandler(self)
 
     @cache_in_self
     def get_room_forgetter_handler(self) -> RoomForgetterHandler:

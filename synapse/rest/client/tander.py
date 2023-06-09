@@ -83,8 +83,36 @@ class GetUnreadNewsByUserRestServlet(RestServlet):
         self.auth = hs.get_auth()
 
     async def on_GET(self, request, room_id, user_id):
-        requester = await self.auth.get_user_by_req(request)
+        await self.auth.get_user_by_req(request)
         return 200, await self.get_info.get_unread_news_by_room_id(room_id, user_id)
+
+
+class PollCreateRestServlet(RestServlet):
+    PATTERNS = client_patterns("/createPoll$", v1=True)
+
+    def __init__(self, hs: "HomeServer"):
+        super(PollCreateRestServlet, self).__init__()
+        self.handler = hs.get_poll_creating_handler()
+        self.auth = hs.get_auth()
+
+    async def on_POST(self, request: "SynapseRequest"):
+        requester = await self.auth.get_user_by_req(request)
+        return 200, await self.handler.create_poll(
+            requester, parse_json_object_from_request(request)
+        )
+
+
+class ListPollsRestServlet(RestServlet):
+    PATTERNS = client_patterns("/getPollsInfo/(?P<room_id>[^/]*)$", v1=True)
+
+    def __init__(self, hs: "HomeServer"):
+        super().__init__()
+        self.handler = hs.get_poll_list_handler()
+        self.auth = hs.get_auth()
+
+    async def on_GET(self, request, room_id):
+        requester = await self.auth.get_user_by_req(request)
+        return 200, await self.handler.list_polls_by_room_id(requester, room_id)
 
 
 def register_servlets(hs: "HomeServer", http_server: HttpServer) -> None:
@@ -92,6 +120,8 @@ def register_servlets(hs: "HomeServer", http_server: HttpServer) -> None:
     CreateNewsRestServlet(hs).register(http_server)
     GetNewsByUserRestServlet(hs).register(http_server)
     GetUnreadNewsByUserRestServlet(hs).register(http_server)
+    PollCreateRestServlet(hs).register(http_server)
+    ListPollsRestServlet(hs).register(http_server)
 
 
 

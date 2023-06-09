@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS polls (room_id VARCHAR(512), poll_creator_user_id VARCHAR(512), poll_alias VARCHAR(512), poll_id VARCHAR(512), active BOOL);
+CREATE TABLE IF NOT EXISTS polls_options (poll_id VARCHAR(512), name VARCHAR(512), count INT, number INT);
+CREATE TABLE IF NOT EXISTS voted_users (poll_id VARCHAR(512), user_id VARCHAR(512), number INT);

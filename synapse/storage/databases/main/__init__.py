@@ -76,6 +76,7 @@ from .user_directory import UserDirectoryStore
 from .user_erasure_store import UserErasureStore
 from .permissions import AccessWorkerStore
 from .news import NewsWorkerStore
+from .polls import PollsWorkerStore
 
 if TYPE_CHECKING:
     from synapse.server import HomeServer
@@ -131,7 +132,8 @@ class DataStore(
     LockStore,
     SessionStore,
     AccessWorkerStore,
-    NewsWorkerStore
+    NewsWorkerStore,
+    PollsWorkerStore
 ):
     def __init__(
         self,
