@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS permission_groups (user_id VARCHAR(512), name VARCHAR(512));
+CREATE TABLE IF NOT EXISTS permissions (entity VARCHAR(512), method VARCHAR(512), path VARCHAR(512), allowed BOOL);

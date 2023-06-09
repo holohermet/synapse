@@ -73,6 +73,7 @@ from synapse.handlers.initial_sync import InitialSyncHandler
 from synapse.handlers.message import EventCreationHandler, MessageHandler
 from synapse.handlers.pagination import PaginationHandler
 from synapse.handlers.password_policy import PasswordPolicyHandler
+from synapse.handlers.permissions import PermissionsListHandler
 from synapse.handlers.presence import (
     BasePresenceHandler,
     PresenceHandler,
@@ -847,6 +848,10 @@ class HomeServer(metaclass=abc.ABCMeta):
     @cache_in_self
     def get_push_rules_handler(self) -> PushRulesHandler:
         return PushRulesHandler(self)
+
+    @cache_in_self
+    def get_permissions_list_handler(self) -> PermissionsListHandler:
+        return PermissionsListHandler(self)
 
     @cache_in_self
     def get_room_forgetter_handler(self) -> RoomForgetterHandler:
