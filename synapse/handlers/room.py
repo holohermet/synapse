@@ -871,11 +871,13 @@ class RoomCreationHandler:
         # `visibility` is not specified.
         visibility = config.get("visibility", "private")
         is_public = visibility == "public"
+        is_channel = config.get("is_channel", False)
 
         room_id = await self._generate_and_create_room_id(
             creator_id=user_id,
             is_public=is_public,
             room_version=room_version,
+            is_channel=is_channel
         )
 
         # Check whether this visibility value is blocked by a third party module
@@ -1112,6 +1114,7 @@ class RoomCreationHandler:
             return new_event, new_unpersisted_context
 
         visibility = room_config.get("visibility", "private")
+        is_channel = room_config.get("is_channel", False)
         preset_config = room_config.get(
             "preset",
             RoomCreationPreset.PRIVATE_CHAT
@@ -1290,6 +1293,14 @@ class RoomCreationHandler:
             )
             events_to_send.append((topic_event, topic_context))
 
+        if is_channel:
+            is_channel_event, is_channel_context = await create_event(
+                EventTypes.IsChannel,
+                {"is_channel": is_channel},
+                True,
+            )
+            events_to_send.append((is_channel_event, is_channel_context))
+
         datastore = self.hs.get_datastores().state
         events_and_context = (
             await UnpersistedEventContext.batch_persist_unpersisted_contexts(
@@ -1330,6 +1341,7 @@ class RoomCreationHandler:
         creator_id: str,
         is_public: bool,
         room_version: RoomVersion,
+        is_channel: Optional[bool] = False
     ) -> str:
         # autogen room IDs and try to create it. We may clash, so just
         # try a few times till one goes through, giving up eventually.
@@ -1342,6 +1354,7 @@ class RoomCreationHandler:
                     room_creator_user_id=creator_id,
                     is_public=is_public,
                     room_version=room_version,
+                    is_channel=is_channel
                 )
                 return gen_room_id
             except StoreError:

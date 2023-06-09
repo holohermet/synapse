@@ -94,6 +94,7 @@ APP_SERVICE_REGISTRATION_TYPE: Final = "m.login.application_service"
 class EventTypes:
     Member: Final = "m.room.member"
     Create: Final = "m.room.create"
+    IsChannel: Final = "m.room.is_channel"
     Tombstone: Final = "m.room.tombstone"
     JoinRules: Final = "m.room.join_rules"
     PowerLevels: Final = "m.room.power_levels"

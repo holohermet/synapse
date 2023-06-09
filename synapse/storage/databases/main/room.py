@@ -160,6 +160,7 @@ class RoomWorkerStore(CacheInvalidationWorkerStore):
         room_creator_user_id: str,
         is_public: bool,
         room_version: RoomVersion,
+        is_channel: bool = False
     ) -> None:
         """Stores a room.
 
@@ -179,6 +180,7 @@ class RoomWorkerStore(CacheInvalidationWorkerStore):
                     "room_id": room_id,
                     "creator": room_creator_user_id,
                     "is_public": is_public,
+                    "is_channel": is_channel,
                     "room_version": room_version.identifier,
                     "has_auth_chain_index": True,
                 },
@@ -200,6 +202,26 @@ class RoomWorkerStore(CacheInvalidationWorkerStore):
             table="rooms",
             keyvalues={"room_id": room_id},
             retcols=("room_id", "is_public", "creator", "has_auth_chain_index"),
+            desc="get_room",
+            allow_none=True,
+        )
+
+    async def get_room_with_channel_flag(self, room_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a room.
+
+        Args:
+            room_id: The ID of the room to retrieve.
+        Returns:
+            A dict containing the room information, or None if the room is unknown.
+        """
+        return await self.db_pool.simple_select_one(
+            table="rooms",
+            keyvalues={"room_id": room_id},
+            retcols=(
+                "room_id", "is_public",
+                "creator", "has_auth_chain_index",
+                "is_channel"
+            ),
             desc="get_room",
             allow_none=True,
         )

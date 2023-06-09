@@ -2,8 +2,6 @@ from unittest import mock
 
 from twisted.test.proto_helpers import MemoryReactor
 
-from tests.utils import create_room
-
 import synapse
 
 from synapse.server import HomeServer
