@@ -74,6 +74,7 @@ from synapse.handlers.message import EventCreationHandler, MessageHandler
 from synapse.handlers.pagination import PaginationHandler
 from synapse.handlers.password_policy import PasswordPolicyHandler
 from synapse.handlers.permissions import PermissionsListHandler
+from synapse.handlers.news import NewsCreatingHandler, NewsModificationHandler
 from synapse.handlers.presence import (
     BasePresenceHandler,
     PresenceHandler,
@@ -852,6 +853,14 @@ class HomeServer(metaclass=abc.ABCMeta):
     @cache_in_self
     def get_permissions_list_handler(self) -> PermissionsListHandler:
         return PermissionsListHandler(self)
+
+    @cache_in_self
+    def get_news_creating_handler(self) -> NewsCreatingHandler:
+        return NewsCreatingHandler(self)
+
+    @cache_in_self
+    def get_news_working_handler(self) -> NewsModificationHandler:
+        return NewsModificationHandler(self)
 
     @cache_in_self
     def get_room_forgetter_handler(self) -> RoomForgetterHandler:

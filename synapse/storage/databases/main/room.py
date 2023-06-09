@@ -251,6 +251,14 @@ class RoomWorkerStore(CacheInvalidationWorkerStore):
             desc="get_public_room_ids",
         )
 
+    async def get_association_from_room_ids(self, room_id: str) -> List[str]:
+        return await self.db_pool.simple_select_onecol(
+            table="rooms",
+            keyvalues={"room_id": room_id},
+            retcol="room_id",
+            desc="get_association_from_room_ids",
+        )
+
     def _construct_room_type_where_clause(
         self, room_types: Union[List[Union[str, None]], None]
     ) -> Tuple[Union[str, None], list]:

@@ -971,3 +971,9 @@ class UserProfile(TypedDict):
 class RetentionPolicy:
     min_lifetime: Optional[int] = None
     max_lifetime: Optional[int] = None
+
+
+class NewsID(DomainSpecificString):
+    """Structure representing a news id. """
+
+    SIGIL = "$"

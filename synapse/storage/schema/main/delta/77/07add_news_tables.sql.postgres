@@ -1,0 +1,2 @@
+CREATE TABLE IF NOT EXISTS news (news_id VARCHAR(512), news_content TEXT, room_id VARCHAR(512), active BOOL);
+CREATE TABLE IF NOT EXISTS read_news (user_id VARCHAR(512), news_id VARCHAR(512), room_id VARCHAR(512));
