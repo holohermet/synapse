@@ -1351,6 +1351,7 @@ class RoomCreationHandler:
         # The spec says rooms should default to private visibility if
         # `visibility` is not specified.
         visibility = room_config.get("visibility", "private")
+        is_channel = room_config.get("is_channel", False)
         preset_name = room_config.get(
             "preset",
             RoomCreationPreset.PRIVATE_CHAT
@@ -1363,6 +1364,7 @@ class RoomCreationHandler:
             raise SynapseError(
                 400, f"'{preset_name}' is not a valid preset", errcode=Codes.BAD_JSON
             )
+        preset_config.update({"is_channel": is_channel})
         return preset_name, preset_config
 
     def _generate_room_id(self) -> str:
