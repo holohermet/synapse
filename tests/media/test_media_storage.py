@@ -129,6 +129,8 @@ class _TestImage:
             a 404/400 is expected.
         unable_to_thumbnail: True if we expect the thumbnailing to fail (400), or
             False if the thumbnailing should succeed or a normal 404 is expected.
+        is_inline: True if we expect the file to be served using an inline
+            Content-Disposition or False if we expect an attachment.
     """
 
     data: bytes
@@ -138,6 +140,7 @@ class _TestImage:
     expected_scaled: Optional[bytes] = None
     expected_found: bool = True
     unable_to_thumbnail: bool = False
+    is_inline: bool = True
 
 
 @parameterized_class(
@@ -196,6 +199,25 @@ class _TestImage:
                 b".gif",
                 expected_found=False,
                 unable_to_thumbnail=True,
+            ),
+        ),
+        # An SVG.
+        (
+            _TestImage(
+                b"""<?xml version="1.0"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="400" height="400">
+  <circle cx="100" cy="100" r="50" stroke="black"
+    stroke-width="5" fill="red" />
+</svg>""",
+                b"image/svg",
+                b".svg",
+                expected_found=False,
+                unable_to_thumbnail=True,
+                is_inline=False,
             ),
         ),
     ],
@@ -317,7 +339,7 @@ class MediaRepoTests(unittest.HomeserverTestCase):
 
     def test_handle_missing_content_type(self) -> None:
         channel = self._req(
-            b"inline; filename=out" + self.test_image.extension,
+            b"attachment; filename=out" + self.test_image.extension,
             include_content_type=False,
         )
         headers = channel.headers
@@ -331,7 +353,7 @@ class MediaRepoTests(unittest.HomeserverTestCase):
         If the filename is filename=<ascii> then Synapse will decode it as an
         ASCII string, and use filename= in the response.
         """
-        channel = self._req(b"inline; filename=out" + self.test_image.extension)
+        channel = self._req(b"attachment; filename=out" + self.test_image.extension)
 
         headers = channel.headers
         self.assertEqual(
@@ -339,7 +361,11 @@ class MediaRepoTests(unittest.HomeserverTestCase):
         )
         self.assertEqual(
             headers.getRawHeaders(b"Content-Disposition"),
-            [b"inline; filename=out" + self.test_image.extension],
+            [
+                (b"inline" if self.test_image.is_inline else b"attachment")
+                + b"; filename=out"
+                + self.test_image.extension
+            ],
         )
 
     def test_disposition_filenamestar_utf8escaped(self) -> None:
@@ -350,7 +376,7 @@ class MediaRepoTests(unittest.HomeserverTestCase):
         """
         filename = parse.quote("\u2603".encode()).encode("ascii")
         channel = self._req(
-            b"inline; filename*=utf-8''" + filename + self.test_image.extension
+            b"attachment; filename*=utf-8''" + filename + self.test_image.extension
         )
 
         headers = channel.headers
@@ -359,13 +385,18 @@ class MediaRepoTests(unittest.HomeserverTestCase):
         )
         self.assertEqual(
             headers.getRawHeaders(b"Content-Disposition"),
-            [b"inline; filename*=utf-8''" + filename + self.test_image.extension],
+            [
+                (b"inline" if self.test_image.is_inline else b"attachment")
+                + b"; filename*=utf-8''"
+                + filename
+                + self.test_image.extension
+            ],
         )
 
     def test_disposition_none(self) -> None:
         """
-        If there is no filename, one isn't passed on in the Content-Disposition
-        of the request.
+        If there is no filename, Content-Disposition should only
+        be a disposition type.
         """
         channel = self._req(None)
 
@@ -373,7 +404,10 @@ class MediaRepoTests(unittest.HomeserverTestCase):
         self.assertEqual(
             headers.getRawHeaders(b"Content-Type"), [self.test_image.content_type]
         )
-        self.assertEqual(headers.getRawHeaders(b"Content-Disposition"), None)
+        self.assertEqual(
+            headers.getRawHeaders(b"Content-Disposition"),
+            [b"inline" if self.test_image.is_inline else b"attachment"],
+        )
 
     def test_thumbnail_crop(self) -> None:
         """Test that a cropped remote thumbnail is available."""
@@ -612,7 +646,7 @@ class MediaRepoTests(unittest.HomeserverTestCase):
         Tests that the `X-Robots-Tag` header is present, which informs web crawlers
         to not index, archive, or follow links in media.
         """
-        channel = self._req(b"inline; filename=out" + self.test_image.extension)
+        channel = self._req(b"attachment; filename=out" + self.test_image.extension)
 
         headers = channel.headers
         self.assertEqual(
@@ -625,7 +659,7 @@ class MediaRepoTests(unittest.HomeserverTestCase):
         Test that the Cross-Origin-Resource-Policy header is set to "cross-origin"
         allowing web clients to embed media from the downloads API.
         """
-        channel = self._req(b"inline; filename=out" + self.test_image.extension)
+        channel = self._req(b"attachment; filename=out" + self.test_image.extension)
 
         headers = channel.headers
 
