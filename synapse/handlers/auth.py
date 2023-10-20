@@ -1441,7 +1441,8 @@ class AuthHandler:
 
         # we use the following format for access tokens:
         #    syt_<base64 local part>_<random string>_<base62 crc check>
-
+        if isinstance(for_user, str):
+            for_user = UserID(for_user, )
         b64local = unpaddedbase64.encode_base64(for_user.localpart.encode("utf-8"))
         random_string = stringutils.random_string(20)
         base = f"syt_{b64local}_{random_string}"

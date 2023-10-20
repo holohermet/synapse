@@ -115,13 +115,52 @@ class ListPollsRestServlet(RestServlet):
         return 200, await self.handler.list_polls_by_room_id(requester, room_id)
 
 
+class SetNewsReadMarkerRestServlet(RestServlet):
+    PATTERNS = client_patterns("/setNewsReadMarker$", v1=True)
+
+    def __init__(self, hs: "HomeServer"):
+        super().__init__()
+        self.handler = hs.get_news_working_handler()
+        self.auth = hs.get_auth()
+
+    async def on_POST(self, request):
+        requester = await self.auth.get_user_by_req(request)
+        return 200, await self.handler.set_news_read_marker(
+            requester,
+            parse_json_object_from_request(request)
+        )
+
+
+class IncrementPollOptionRestServlet(RestServlet):
+    PATTERNS = client_patterns("/incrementPollOption$", v1=True)
+
+    def __init__(self, hs: "HomeServer"):
+        super().__init__()
+        self.handler = hs.get_poll_working_handler()
+        self.auth = hs.get_auth()
+
+    async def on_POST(self, request):
+        requester = await self.auth.get_user_by_req(request)
+        info = await self.handler.vote_for_option(
+            requester=requester,
+            config=parse_json_object_from_request(request)
+        )
+        return 200, info
+
+    def on_OPTIONS(self, request):
+        return 200, {}
+
+
 def register_servlets(hs: "HomeServer", http_server: HttpServer) -> None:
     GetPermissionsRestServlet(hs).register(http_server)
     CreateNewsRestServlet(hs).register(http_server)
     GetNewsByUserRestServlet(hs).register(http_server)
+    GetNewsByIdRestServlet(hs).register(http_server)
     GetUnreadNewsByUserRestServlet(hs).register(http_server)
     PollCreateRestServlet(hs).register(http_server)
     ListPollsRestServlet(hs).register(http_server)
+    IncrementPollOptionRestServlet(hs).register(http_server)
+    SetNewsReadMarkerRestServlet(hs).register(http_server)
 
 
 
