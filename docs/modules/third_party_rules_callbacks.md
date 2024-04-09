@@ -142,6 +142,10 @@ Called after sending an event into a room. The module is passed the event, as we
 as the state of the room _after_ the event. This means that if the event is a state event,
 it will be included in this state.
 
+The state map may not be complete if Synapse hasn't yet loaded the full state
+of the room. This can happen for events in rooms that were just joined from
+a remote server.
+
 Note that this callback is called when the event has already been processed and stored
 into the room, which means this callback cannot be used to deny persisting the event. To
 deny an incoming event, see [`check_event_for_spam`](spam_checker_callbacks.md#check_event_for_spam) instead.
@@ -224,7 +228,7 @@ wishing this callback to be called on every profile change are encouraged to dis
 per-room profiles globally using the `allow_per_room_profiles` configuration setting in
 Synapse's configuration file.
 This callback is not called when registering a user, even when setting it through the
-[`get_displayname_for_registration`](https://matrix-org.github.io/synapse/latest/modules/password_auth_provider_callbacks.html#get_displayname_for_registration)
+[`get_displayname_for_registration`](https://element-hq.github.io/synapse/latest/modules/password_auth_provider_callbacks.html#get_displayname_for_registration)
 module callback.
 
 If multiple modules implement this callback, Synapse runs them all in order.

@@ -1,18 +1,24 @@
-# Copyright 2015, 2016 OpenMarket Ltd
-# Copyright 2019 New Vector Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2019,2020 The Matrix.org Foundation C.I.C.
+# Copyright 2015, 2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import abc
 from typing import (
     TYPE_CHECKING,
@@ -24,6 +30,7 @@ from typing import (
     Mapping,
     Optional,
     Sequence,
+    Set,
     Tuple,
     Union,
     cast,
@@ -155,7 +162,6 @@ class EndToEndKeyWorkerStore(EndToEndKeyBackgroundStore, CacheInvalidationWorker
             """
             rows = await self.db_pool.execute(
                 "get_e2e_device_keys_for_federation_query_check",
-                None,
                 sql,
                 now_stream_id,
                 user_id,
@@ -250,8 +256,7 @@ class EndToEndKeyWorkerStore(EndToEndKeyBackgroundStore, CacheInvalidationWorker
         self,
         query_list: Collection[Tuple[str, Optional[str]]],
         include_all_devices: Literal[False] = False,
-    ) -> Dict[str, Dict[str, DeviceKeyLookupResult]]:
-        ...
+    ) -> Dict[str, Dict[str, DeviceKeyLookupResult]]: ...
 
     @overload
     async def get_e2e_device_keys_and_signatures(
@@ -259,8 +264,7 @@ class EndToEndKeyWorkerStore(EndToEndKeyBackgroundStore, CacheInvalidationWorker
         query_list: Collection[Tuple[str, Optional[str]]],
         include_all_devices: bool = False,
         include_deleted_devices: Literal[False] = False,
-    ) -> Dict[str, Dict[str, DeviceKeyLookupResult]]:
-        ...
+    ) -> Dict[str, Dict[str, DeviceKeyLookupResult]]: ...
 
     @overload
     async def get_e2e_device_keys_and_signatures(
@@ -268,8 +272,7 @@ class EndToEndKeyWorkerStore(EndToEndKeyBackgroundStore, CacheInvalidationWorker
         query_list: Collection[Tuple[str, Optional[str]]],
         include_all_devices: Literal[True],
         include_deleted_devices: Literal[True],
-    ) -> Dict[str, Dict[str, Optional[DeviceKeyLookupResult]]]:
-        ...
+    ) -> Dict[str, Dict[str, Optional[DeviceKeyLookupResult]]]: ...
 
     @trace
     @cancellable
@@ -402,17 +405,24 @@ class EndToEndKeyWorkerStore(EndToEndKeyBackgroundStore, CacheInvalidationWorker
         def get_e2e_device_keys_txn(
             txn: LoggingTransaction, query_clause: str, query_params: list
         ) -> None:
-            sql = (
-                "SELECT user_id, device_id, "
-                "    d.display_name, "
-                "    k.key_json"
-                " FROM devices d"
-                "    %s JOIN e2e_device_keys_json k USING (user_id, device_id)"
-                " WHERE %s AND NOT d.hidden"
-            ) % (
-                "LEFT" if include_all_devices else "INNER",
-                query_clause,
-            )
+            if include_all_devices:
+                sql = f"""
+                    SELECT user_id, device_id, d.display_name, k.key_json
+                    FROM devices d
+                    LEFT JOIN e2e_device_keys_json k USING (user_id, device_id)
+                    WHERE {query_clause} AND NOT d.hidden
+                """
+            else:
+                # We swap around `e2e_device_keys_json` and `devices`, as we
+                # want Postgres to query `e2e_device_keys_json` first as it will
+                # have fewer rows in it. This helps *a lot* with accounts with
+                # lots of non-e2e devices (such as bots).
+                sql = f"""
+                    SELECT user_id, device_id, d.display_name, k.key_json
+                    FROM e2e_device_keys_json k
+                    INNER JOIN devices d USING (user_id, device_id)
+                    WHERE {query_clause} AND NOT d.hidden
+                """
 
             txn.execute(sql, query_params)
 
@@ -493,15 +503,18 @@ class EndToEndKeyWorkerStore(EndToEndKeyBackgroundStore, CacheInvalidationWorker
             A map from (algorithm, key_id) to json string for key
         """
 
-        rows = await self.db_pool.simple_select_many_batch(
-            table="e2e_one_time_keys_json",
-            column="key_id",
-            iterable=key_ids,
-            retcols=("algorithm", "key_id", "key_json"),
-            keyvalues={"user_id": user_id, "device_id": device_id},
-            desc="add_e2e_one_time_keys_check",
+        rows = cast(
+            List[Tuple[str, str, str]],
+            await self.db_pool.simple_select_many_batch(
+                table="e2e_one_time_keys_json",
+                column="key_id",
+                iterable=key_ids,
+                retcols=("algorithm", "key_id", "key_json"),
+                keyvalues={"user_id": user_id, "device_id": device_id},
+                desc="add_e2e_one_time_keys_check",
+            ),
         )
-        result = {(row["algorithm"], row["key_id"]): row["key_json"] for row in rows}
+        result = {(algorithm, key_id): key_json for algorithm, key_id, key_json in rows}
         log_kv({"message": "Fetched one time keys for user", "one_time_keys": result})
         return result
 
@@ -921,14 +934,10 @@ class EndToEndKeyWorkerStore(EndToEndKeyBackgroundStore, CacheInvalidationWorker
                 }
 
             txn.execute(sql, params)
-            rows = self.db_pool.cursor_to_dict(txn)
 
-            for row in rows:
-                user_id = row["user_id"]
-                key_type = row["keytype"]
-                key = db_to_json(row["keydata"])
+            for user_id, key_type, key_data, _ in txn:
                 user_keys = result.setdefault(user_id, {})
-                user_keys[key_type] = key
+                user_keys[key_type] = db_to_json(key_data)
 
         return result
 
@@ -988,13 +997,9 @@ class EndToEndKeyWorkerStore(EndToEndKeyBackgroundStore, CacheInvalidationWorker
                 query_params.extend(item)
 
             txn.execute(sql, query_params)
-            rows = self.db_pool.cursor_to_dict(txn)
 
             # and add the signatures to the appropriate keys
-            for row in rows:
-                key_id: str = row["key_id"]
-                target_user_id: str = row["target_user_id"]
-                target_device_id: str = row["target_device_id"]
+            for target_user_id, target_device_id, key_id, signature in txn:
                 key_type = devices[(target_user_id, target_device_id)]
                 # We need to copy everything, because the result may have come
                 # from the cache.  dict.copy only does a shallow copy, so we
@@ -1012,13 +1017,11 @@ class EndToEndKeyWorkerStore(EndToEndKeyBackgroundStore, CacheInvalidationWorker
                     ].copy()
                     if from_user_id in signatures:
                         user_sigs = signatures[from_user_id] = signatures[from_user_id]
-                        user_sigs[key_id] = row["signature"]
+                        user_sigs[key_id] = signature
                     else:
-                        signatures[from_user_id] = {key_id: row["signature"]}
+                        signatures[from_user_id] = {key_id: signature}
                 else:
-                    target_user_key["signatures"] = {
-                        from_user_id: {key_id: row["signature"]}
-                    }
+                    target_user_key["signatures"] = {from_user_id: {key_id: signature}}
 
         return keys
 
@@ -1118,7 +1121,7 @@ class EndToEndKeyWorkerStore(EndToEndKeyBackgroundStore, CacheInvalidationWorker
         ...
 
     async def claim_e2e_one_time_keys(
-        self, query_list: Iterable[Tuple[str, str, str, int]]
+        self, query_list: Collection[Tuple[str, str, str, int]]
     ) -> Tuple[
         Dict[str, Dict[str, Dict[str, JsonDict]]], List[Tuple[str, str, str, int]]
     ]:
@@ -1128,131 +1131,63 @@ class EndToEndKeyWorkerStore(EndToEndKeyBackgroundStore, CacheInvalidationWorker
             query_list: An iterable of tuples of (user ID, device ID, algorithm).
 
         Returns:
-            A tuple pf:
+            A tuple (results, missing) of:
                 A map of user ID -> a map device ID -> a map of key ID -> JSON.
 
-                A copy of the input which has not been fulfilled.
+                A copy of the input which has not been fulfilled. The returned counts
+                may be less than the input counts. In this case, the returned counts
+                are the number of claims that were not fulfilled.
         """
-
-        @trace
-        def _claim_e2e_one_time_key_simple(
-            txn: LoggingTransaction,
-            user_id: str,
-            device_id: str,
-            algorithm: str,
-            count: int,
-        ) -> List[Tuple[str, str]]:
-            """Claim OTK for device for DBs that don't support RETURNING.
-
-            Returns:
-                A tuple of key name (algorithm + key ID) and key JSON, if an
-                OTK was found.
-            """
-
-            sql = """
-                SELECT key_id, key_json FROM e2e_one_time_keys_json
-                WHERE user_id = ? AND device_id = ? AND algorithm = ?
-                LIMIT ?
-            """
-
-            txn.execute(sql, (user_id, device_id, algorithm, count))
-            otk_rows = list(txn)
-            if not otk_rows:
-                return []
-
-            self.db_pool.simple_delete_many_txn(
-                txn,
-                table="e2e_one_time_keys_json",
-                column="key_id",
-                values=[otk_row[0] for otk_row in otk_rows],
-                keyvalues={
-                    "user_id": user_id,
-                    "device_id": device_id,
-                    "algorithm": algorithm,
-                },
-            )
-            self._invalidate_cache_and_stream(
-                txn, self.count_e2e_one_time_keys, (user_id, device_id)
-            )
-
-            return [
-                (f"{algorithm}:{key_id}", key_json) for key_id, key_json in otk_rows
-            ]
-
-        @trace
-        def _claim_e2e_one_time_key_returning(
-            txn: LoggingTransaction,
-            user_id: str,
-            device_id: str,
-            algorithm: str,
-            count: int,
-        ) -> List[Tuple[str, str]]:
-            """Claim OTK for device for DBs that support RETURNING.
-
-            Returns:
-                A tuple of key name (algorithm + key ID) and key JSON, if an
-                OTK was found.
-            """
-
-            # We can use RETURNING to do the fetch and DELETE in once step.
-            sql = """
-                DELETE FROM e2e_one_time_keys_json
-                WHERE user_id = ? AND device_id = ? AND algorithm = ?
-                    AND key_id IN (
-                        SELECT key_id FROM e2e_one_time_keys_json
-                        WHERE user_id = ? AND device_id = ? AND algorithm = ?
-                        LIMIT ?
-                    )
-                RETURNING key_id, key_json
-            """
-
-            txn.execute(
-                sql,
-                (user_id, device_id, algorithm, user_id, device_id, algorithm, count),
-            )
-            otk_rows = list(txn)
-            if not otk_rows:
-                return []
-
-            self._invalidate_cache_and_stream(
-                txn, self.count_e2e_one_time_keys, (user_id, device_id)
-            )
-
-            return [
-                (f"{algorithm}:{key_id}", key_json) for key_id, key_json in otk_rows
-            ]
-
         results: Dict[str, Dict[str, Dict[str, JsonDict]]] = {}
         missing: List[Tuple[str, str, str, int]] = []
-        for user_id, device_id, algorithm, count in query_list:
-            if self.database_engine.supports_returning:
-                # If we support RETURNING clause we can use a single query that
-                # allows us to use autocommit mode.
-                _claim_e2e_one_time_key = _claim_e2e_one_time_key_returning
-                db_autocommit = True
-            else:
-                _claim_e2e_one_time_key = _claim_e2e_one_time_key_simple
-                db_autocommit = False
+        if isinstance(self.database_engine, PostgresEngine):
+            # If we can use execute_values we can use a single batch query
+            # in autocommit mode.
+            unfulfilled_claim_counts: Dict[Tuple[str, str, str], int] = {}
+            for user_id, device_id, algorithm, count in query_list:
+                unfulfilled_claim_counts[user_id, device_id, algorithm] = count
 
-            claim_rows = await self.db_pool.runInteraction(
+            bulk_claims = await self.db_pool.runInteraction(
                 "claim_e2e_one_time_keys",
-                _claim_e2e_one_time_key,
-                user_id,
-                device_id,
-                algorithm,
-                count,
-                db_autocommit=db_autocommit,
+                self._claim_e2e_one_time_keys_bulk,
+                query_list,
+                db_autocommit=True,
             )
-            if claim_rows:
+
+            for user_id, device_id, algorithm, key_id, key_json in bulk_claims:
                 device_results = results.setdefault(user_id, {}).setdefault(
                     device_id, {}
                 )
-                for claim_row in claim_rows:
-                    device_results[claim_row[0]] = json_decoder.decode(claim_row[1])
+                device_results[f"{algorithm}:{key_id}"] = json_decoder.decode(key_json)
+                unfulfilled_claim_counts[(user_id, device_id, algorithm)] -= 1
+
             # Did we get enough OTKs?
-            count -= len(claim_rows)
-            if count:
-                missing.append((user_id, device_id, algorithm, count))
+            missing = [
+                (user, device, alg, count)
+                for (user, device, alg), count in unfulfilled_claim_counts.items()
+                if count > 0
+            ]
+        else:
+            for user_id, device_id, algorithm, count in query_list:
+                claim_rows = await self.db_pool.runInteraction(
+                    "claim_e2e_one_time_keys",
+                    self._claim_e2e_one_time_key_simple,
+                    user_id,
+                    device_id,
+                    algorithm,
+                    count,
+                    db_autocommit=False,
+                )
+                if claim_rows:
+                    device_results = results.setdefault(user_id, {}).setdefault(
+                        device_id, {}
+                    )
+                    for claim_row in claim_rows:
+                        device_results[claim_row[0]] = json_decoder.decode(claim_row[1])
+                # Did we get enough OTKs?
+                count -= len(claim_rows)
+                if count:
+                    missing.append((user_id, device_id, algorithm, count))
 
         return results, missing
 
@@ -1268,6 +1203,63 @@ class EndToEndKeyWorkerStore(EndToEndKeyBackgroundStore, CacheInvalidationWorker
         Returns:
             A map of user ID -> a map device ID -> a map of key ID -> JSON.
         """
+        if isinstance(self.database_engine, PostgresEngine):
+            return await self.db_pool.runInteraction(
+                "_claim_e2e_fallback_keys_bulk",
+                self._claim_e2e_fallback_keys_bulk_txn,
+                query_list,
+                db_autocommit=True,
+            )
+            # Use an UPDATE FROM... RETURNING combined with a VALUES block to do
+            # everything in one query. Note: this is also supported in SQLite 3.33.0,
+            # (see https://www.sqlite.org/lang_update.html#update_from), but we do not
+            # have an equivalent of psycopg2's execute_values to do this in one query.
+        else:
+            return await self._claim_e2e_fallback_keys_simple(query_list)
+
+    def _claim_e2e_fallback_keys_bulk_txn(
+        self,
+        txn: LoggingTransaction,
+        query_list: Iterable[Tuple[str, str, str, bool]],
+    ) -> Dict[str, Dict[str, Dict[str, JsonDict]]]:
+        """Efficient implementation of claim_e2e_fallback_keys for Postgres.
+
+        Safe to autocommit: this is a single query.
+        """
+        results: Dict[str, Dict[str, Dict[str, JsonDict]]] = {}
+
+        sql = """
+            WITH claims(user_id, device_id, algorithm, mark_as_used) AS (
+                VALUES ?
+            )
+            UPDATE e2e_fallback_keys_json k
+            SET used = used OR mark_as_used
+            FROM claims
+            WHERE (k.user_id, k.device_id, k.algorithm) = (claims.user_id, claims.device_id, claims.algorithm)
+            RETURNING k.user_id, k.device_id, k.algorithm, k.key_id, k.key_json;
+        """
+        claimed_keys = cast(
+            List[Tuple[str, str, str, str, str]],
+            txn.execute_values(sql, query_list),
+        )
+
+        seen_user_device: Set[Tuple[str, str]] = set()
+        for user_id, device_id, algorithm, key_id, key_json in claimed_keys:
+            device_results = results.setdefault(user_id, {}).setdefault(device_id, {})
+            device_results[f"{algorithm}:{key_id}"] = json_decoder.decode(key_json)
+            seen_user_device.add((user_id, device_id))
+
+        self._invalidate_cache_and_stream_bulk(
+            txn, self.get_e2e_unused_fallback_key_types, seen_user_device
+        )
+
+        return results
+
+    async def _claim_e2e_fallback_keys_simple(
+        self,
+        query_list: Iterable[Tuple[str, str, str, bool]],
+    ) -> Dict[str, Dict[str, Dict[str, JsonDict]]]:
+        """Naive, inefficient implementation of claim_e2e_fallback_keys for SQLite."""
         results: Dict[str, Dict[str, Dict[str, JsonDict]]] = {}
         for user_id, device_id, algorithm, mark_as_used in query_list:
             row = await self.db_pool.simple_select_one(
@@ -1284,9 +1276,7 @@ class EndToEndKeyWorkerStore(EndToEndKeyBackgroundStore, CacheInvalidationWorker
             if row is None:
                 continue
 
-            key_id = row["key_id"]
-            key_json = row["key_json"]
-            used = row["used"]
+            key_id, key_json, used = row
 
             # Mark fallback key as used if not already.
             if not used and mark_as_used:
@@ -1309,6 +1299,144 @@ class EndToEndKeyWorkerStore(EndToEndKeyBackgroundStore, CacheInvalidationWorker
             device_results[f"{algorithm}:{key_id}"] = json_decoder.decode(key_json)
 
         return results
+
+    @trace
+    def _claim_e2e_one_time_key_simple(
+        self,
+        txn: LoggingTransaction,
+        user_id: str,
+        device_id: str,
+        algorithm: str,
+        count: int,
+    ) -> List[Tuple[str, str]]:
+        """Claim OTK for device for DBs that don't support RETURNING.
+
+        Returns:
+            A tuple of key name (algorithm + key ID) and key JSON, if an
+            OTK was found.
+        """
+
+        sql = """
+            SELECT key_id, key_json FROM e2e_one_time_keys_json
+            WHERE user_id = ? AND device_id = ? AND algorithm = ?
+            LIMIT ?
+        """
+
+        txn.execute(sql, (user_id, device_id, algorithm, count))
+        otk_rows = list(txn)
+        if not otk_rows:
+            return []
+
+        self.db_pool.simple_delete_many_txn(
+            txn,
+            table="e2e_one_time_keys_json",
+            column="key_id",
+            values=[otk_row[0] for otk_row in otk_rows],
+            keyvalues={
+                "user_id": user_id,
+                "device_id": device_id,
+                "algorithm": algorithm,
+            },
+        )
+        self._invalidate_cache_and_stream(
+            txn, self.count_e2e_one_time_keys, (user_id, device_id)
+        )
+
+        return [(f"{algorithm}:{key_id}", key_json) for key_id, key_json in otk_rows]
+
+    @trace
+    def _claim_e2e_one_time_keys_bulk(
+        self,
+        txn: LoggingTransaction,
+        query_list: Iterable[Tuple[str, str, str, int]],
+    ) -> List[Tuple[str, str, str, str, str]]:
+        """Bulk claim OTKs, for DBs that support DELETE FROM... RETURNING.
+
+        Args:
+            query_list: Collection of tuples (user_id, device_id, algorithm, count)
+                as passed to claim_e2e_one_time_keys.
+
+        Returns:
+            A list of tuples (user_id, device_id, algorithm, key_id, key_json)
+            for each OTK claimed.
+        """
+        sql = """
+            WITH claims(user_id, device_id, algorithm, claim_count) AS (
+                VALUES ?
+            ), ranked_keys AS (
+                SELECT
+                    user_id, device_id, algorithm, key_id, claim_count,
+                    ROW_NUMBER() OVER (PARTITION BY (user_id, device_id, algorithm)) AS r
+                FROM e2e_one_time_keys_json
+                    JOIN claims USING (user_id, device_id, algorithm)
+            )
+            DELETE FROM e2e_one_time_keys_json k
+            WHERE (user_id, device_id, algorithm, key_id) IN (
+                SELECT user_id, device_id, algorithm, key_id
+                FROM ranked_keys
+                WHERE r <= claim_count
+            )
+            RETURNING user_id, device_id, algorithm, key_id, key_json;
+        """
+        otk_rows = cast(
+            List[Tuple[str, str, str, str, str]], txn.execute_values(sql, query_list)
+        )
+
+        seen_user_device = {
+            (user_id, device_id) for user_id, device_id, _, _, _ in otk_rows
+        }
+        self._invalidate_cache_and_stream_bulk(
+            txn,
+            self.count_e2e_one_time_keys,
+            seen_user_device,
+        )
+
+        return otk_rows
+
+    async def get_master_cross_signing_key_updatable_before(
+        self, user_id: str
+    ) -> Tuple[bool, Optional[int]]:
+        """Get time before which a master cross-signing key may be replaced without UIA.
+
+        (UIA means "User-Interactive Auth".)
+
+        There are three cases to distinguish:
+         (1) No master cross-signing key.
+         (2) The key exists, but there is no replace-without-UI timestamp in the DB.
+         (3) The key exists, and has such a timestamp recorded.
+
+        Returns: a 2-tuple of:
+          - a boolean: is there a master cross-signing key already?
+          - an optional timestamp, directly taken from the DB.
+
+        In terms of the cases above, these are:
+         (1) (False, None).
+         (2) (True, None).
+         (3) (True, <timestamp in ms>).
+
+        """
+
+        def impl(txn: LoggingTransaction) -> Tuple[bool, Optional[int]]:
+            # We want to distinguish between three cases:
+            txn.execute(
+                """
+                SELECT updatable_without_uia_before_ms
+                FROM e2e_cross_signing_keys
+                WHERE user_id = ? AND keytype = 'master'
+                ORDER BY stream_id DESC
+                LIMIT 1
+            """,
+                (user_id,),
+            )
+            row = cast(Optional[Tuple[Optional[int]]], txn.fetchone())
+            if row is None:
+                return False, None
+            return True, row[0]
+
+        return await self.db_pool.runInteraction(
+            "e2e_cross_signing_keys",
+            impl,
+        )
 
 
 class EndToEndKeyStore(EndToEndKeyWorkerStore, SQLBaseStore):
@@ -1556,4 +1684,43 @@ class EndToEndKeyStore(EndToEndKeyWorkerStore, SQLBaseStore):
                 for item in signatures
             ],
             desc="add_e2e_signing_key",
+        )
+
+    async def allow_master_cross_signing_key_replacement_without_uia(
+        self, user_id: str, duration_ms: int
+    ) -> Optional[int]:
+        """Mark this user's latest master key as being replaceable without UIA.
+
+        Said replacement will only be permitted for a short time after calling this
+        function. That time period is controlled by the duration argument.
+
+        Returns:
+            None, if there is no such key.
+            Otherwise, the timestamp before which replacement is allowed without UIA.
+        """
+        timestamp = self._clock.time_msec() + duration_ms
+
+        def impl(txn: LoggingTransaction) -> Optional[int]:
+            txn.execute(
+                """
+                UPDATE e2e_cross_signing_keys
+                SET updatable_without_uia_before_ms = ?
+                WHERE stream_id = (
+                    SELECT stream_id
+                    FROM e2e_cross_signing_keys
+                    WHERE user_id = ? AND keytype = 'master'
+                    ORDER BY stream_id DESC
+                    LIMIT 1
+                )
+            """,
+                (timestamp, user_id),
+            )
+            if txn.rowcount == 0:
+                return None
+
+            return timestamp
+
+        return await self.db_pool.runInteraction(
+            "allow_master_cross_signing_key_replacement_without_uia",
+            impl,
         )

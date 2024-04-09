@@ -1,17 +1,23 @@
-# Copyright 2018 New Vector Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This file is licensed under the Affero General Public License (AGPL) version 3.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-from typing import Optional
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
+#
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
+from typing import Collection, List, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
 from twisted.test.proto_helpers import MemoryReactor
@@ -19,7 +25,10 @@ from twisted.test.proto_helpers import MemoryReactor
 from synapse.api.constants import EventTypes, JoinRules
 from synapse.api.errors import Codes, ResourceLimitError
 from synapse.api.filtering import Filtering
-from synapse.api.room_versions import RoomVersions
+from synapse.api.room_versions import RoomVersion, RoomVersions
+from synapse.events import EventBase
+from synapse.events.snapshot import EventContext
+from synapse.federation.federation_base import event_from_pdu_json
 from synapse.handlers.sync import SyncConfig, SyncResult
 from synapse.rest import admin
 from synapse.rest.client import knock, login, room
@@ -278,6 +287,114 @@ class SyncTestCase(tests.unittest.HomeserverTestCase):
             )
         )
         self.assertEqual(eve_initial_sync_after_join.joined, [])
+
+    def test_call_invite_in_public_room_not_returned(self) -> None:
+        user = self.register_user("alice", "password")
+        tok = self.login(user, "password")
+        room_id = self.helper.create_room_as(user, is_public=True, tok=tok)
+        self.handler = self.hs.get_federation_handler()
+        federation_event_handler = self.hs.get_federation_event_handler()
+
+        async def _check_event_auth(
+            origin: Optional[str], event: EventBase, context: EventContext
+        ) -> None:
+            pass
+
+        federation_event_handler._check_event_auth = _check_event_auth  # type: ignore[method-assign]
+        self.client = self.hs.get_federation_client()
+
+        async def _check_sigs_and_hash_for_pulled_events_and_fetch(
+            dest: str, pdus: Collection[EventBase], room_version: RoomVersion
+        ) -> List[EventBase]:
+            return list(pdus)
+
+        self.client._check_sigs_and_hash_for_pulled_events_and_fetch = _check_sigs_and_hash_for_pulled_events_and_fetch  # type: ignore[assignment]
+
+        prev_events = self.get_success(self.store.get_prev_events_for_room(room_id))
+
+        # create a call invite event
+        call_event = event_from_pdu_json(
+            {
+                "type": EventTypes.CallInvite,
+                "content": {},
+                "room_id": room_id,
+                "sender": user,
+                "depth": 32,
+                "prev_events": prev_events,
+                "auth_events": prev_events,
+                "origin_server_ts": self.clock.time_msec(),
+            },
+            RoomVersions.V10,
+        )
+
+        self.assertEqual(
+            self.get_success(
+                federation_event_handler.on_receive_pdu("test.serv", call_event)
+            ),
+            None,
+        )
+
+        # check that it is in DB
+        recent_event = self.get_success(self.store.get_prev_events_for_room(room_id))
+        self.assertIn(call_event.event_id, recent_event)
+
+        # but that it does not come down /sync in public room
+        sync_result: SyncResult = self.get_success(
+            self.sync_handler.wait_for_sync_for_user(
+                create_requester(user), generate_sync_config(user)
+            )
+        )
+        event_ids = []
+        for event in sync_result.joined[0].timeline.events:
+            event_ids.append(event.event_id)
+        self.assertNotIn(call_event.event_id, event_ids)
+
+        # it will come down in a private room, though
+        user2 = self.register_user("bob", "password")
+        tok2 = self.login(user2, "password")
+        private_room_id = self.helper.create_room_as(
+            user2, is_public=False, tok=tok2, extra_content={"preset": "private_chat"}
+        )
+
+        priv_prev_events = self.get_success(
+            self.store.get_prev_events_for_room(private_room_id)
+        )
+        private_call_event = event_from_pdu_json(
+            {
+                "type": EventTypes.CallInvite,
+                "content": {},
+                "room_id": private_room_id,
+                "sender": user,
+                "depth": 32,
+                "prev_events": priv_prev_events,
+                "auth_events": priv_prev_events,
+                "origin_server_ts": self.clock.time_msec(),
+            },
+            RoomVersions.V10,
+        )
+
+        self.assertEqual(
+            self.get_success(
+                federation_event_handler.on_receive_pdu("test.serv", private_call_event)
+            ),
+            None,
+        )
+
+        recent_events = self.get_success(
+            self.store.get_prev_events_for_room(private_room_id)
+        )
+        self.assertIn(private_call_event.event_id, recent_events)
+
+        private_sync_result: SyncResult = self.get_success(
+            self.sync_handler.wait_for_sync_for_user(
+                create_requester(user2), generate_sync_config(user2)
+            )
+        )
+        priv_event_ids = []
+        for event in private_sync_result.joined[0].timeline.events:
+            priv_event_ids.append(event.event_id)
+
+        self.assertIn(private_call_event.event_id, priv_event_ids)
 
 
 _request_key = 0

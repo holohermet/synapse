@@ -1,17 +1,24 @@
-# Copyright 2014-2022 The Matrix.org Foundation C.I.C.
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2020 Sorunome
+# Copyright 2014-2022 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 """Contains handlers for federation events."""
 
@@ -868,19 +875,10 @@ class FederationHandler:
         # This is a bit of a hack and is cribbing off of invites. Basically we
         # store the room state here and retrieve it again when this event appears
         # in the invitee's sync stream. It is stripped out for all other local users.
-        stripped_room_state = (
-            knock_response.get("knock_room_state")
-            # Since v1.37, Synapse incorrectly used "knock_state_events" for this field.
-            # Thus, we also check for a 'knock_state_events' to support old instances.
-            # See https://github.com/matrix-org/synapse/issues/14088.
-            or knock_response.get("knock_state_events")
-        )
+        stripped_room_state = knock_response.get("knock_room_state")
 
         if stripped_room_state is None:
-            raise KeyError(
-                "Missing 'knock_room_state' (or legacy 'knock_state_events') field in "
-                "send_knock response"
-            )
+            raise KeyError("Missing 'knock_room_state' field in send_knock response")
 
         event.unsigned["knock_room_state"] = stripped_room_state
 
@@ -1003,11 +1001,11 @@ class FederationHandler:
                     )
 
                 if include_auth_user_id:
-                    event_content[
-                        EventContentFields.AUTHORISING_USER
-                    ] = await self._event_auth_handler.get_user_which_could_invite(
-                        room_id,
-                        state_ids,
+                    event_content[EventContentFields.AUTHORISING_USER] = (
+                        await self._event_auth_handler.get_user_which_could_invite(
+                            room_id,
+                            state_ids,
+                        )
                     )
 
         builder = self.event_builder_factory.for_room_version(
@@ -1506,7 +1504,6 @@ class FederationHandler:
                     # in the meantime and context needs to be recomputed, so let's do so.
                     if i == max_retries - 1:
                         raise e
-                    pass
         else:
             destinations = {x.split(":", 1)[-1] for x in (sender_user_id, room_id)}
 
@@ -1582,7 +1579,6 @@ class FederationHandler:
                 # in the meantime and context needs to be recomputed, so let's do so.
                 if i == max_retries - 1:
                     raise e
-                pass
 
     async def add_display_name_to_third_party_invite(
         self,

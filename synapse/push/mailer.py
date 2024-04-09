@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import logging
 import urllib.parse
@@ -19,6 +26,7 @@ from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, TypeVar
 import bleach
 import jinja2
 from markupsafe import Markup
+from prometheus_client import Counter
 
 from synapse.api.constants import EventTypes, Membership, RoomTypes
 from synapse.api.errors import StoreError
@@ -48,6 +56,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+emails_sent_counter = Counter(
+    "synapse_emails_sent_total",
+    "Emails sent by type",
+    ["type"],
+)
 
 
 CONTEXT_BEFORE = 1
@@ -123,6 +137,8 @@ class Mailer:
 
         logger.info("Created Mailer for app_name %s" % app_name)
 
+    emails_sent_counter.labels("password_reset")
+
     async def send_password_reset_mail(
         self, email_address: str, token: str, client_secret: str, sid: str
     ) -> None:
@@ -146,12 +162,16 @@ class Mailer:
 
         template_vars: TemplateVars = {"link": link}
 
+        emails_sent_counter.labels("password_reset").inc()
+
         await self.send_email(
             email_address,
             self.email_subjects.password_reset
             % {"server_name": self.hs.config.server.server_name, "app": self.app_name},
             template_vars,
         )
+
+    emails_sent_counter.labels("registration")
 
     async def send_registration_mail(
         self, email_address: str, token: str, client_secret: str, sid: str
@@ -176,12 +196,16 @@ class Mailer:
 
         template_vars: TemplateVars = {"link": link}
 
+        emails_sent_counter.labels("registration").inc()
+
         await self.send_email(
             email_address,
             self.email_subjects.email_validation
             % {"server_name": self.hs.config.server.server_name, "app": self.app_name},
             template_vars,
         )
+
+    emails_sent_counter.labels("add_threepid")
 
     async def send_add_threepid_mail(
         self, email_address: str, token: str, client_secret: str, sid: str
@@ -207,12 +231,16 @@ class Mailer:
 
         template_vars: TemplateVars = {"link": link}
 
+        emails_sent_counter.labels("add_threepid").inc()
+
         await self.send_email(
             email_address,
             self.email_subjects.email_validation
             % {"server_name": self.hs.config.server.server_name, "app": self.app_name},
             template_vars,
         )
+
+    emails_sent_counter.labels("notification")
 
     async def send_notification_mail(
         self,
@@ -308,6 +336,8 @@ class Mailer:
             "reason": reason,
         }
 
+        emails_sent_counter.labels("notification").inc()
+
         await self.send_email(
             email_address, summary_text, template_vars, unsubscribe_link
         )
@@ -347,12 +377,14 @@ class Mailer:
             #
             # Note that many email clients will not render the unsubscribe link
             # unless DKIM, etc. is properly setup.
-            additional_headers={
-                "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-                "List-Unsubscribe": f"<{unsubscribe_link}>",
-            }
-            if unsubscribe_link
-            else None,
+            additional_headers=(
+                {
+                    "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+                    "List-Unsubscribe": f"<{unsubscribe_link}>",
+                }
+                if unsubscribe_link
+                else None
+            ),
         )
 
     async def _get_room_vars(

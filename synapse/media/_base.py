@@ -1,17 +1,24 @@
-# Copyright 2014-2016 OpenMarket Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2019-2021 The Matrix.org Foundation C.I.C.
+# Copyright 2014-2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import logging
 import os
@@ -26,11 +33,11 @@ from twisted.internet.interfaces import IConsumer
 from twisted.protocols.basic import FileSender
 from twisted.web.server import Request
 
-from synapse.api.errors import Codes, SynapseError, cs_error
+from synapse.api.errors import Codes, cs_error
 from synapse.http.server import finish_request, respond_with_json
 from synapse.http.site import SynapseRequest
 from synapse.logging.context import make_deferred_yieldable
-from synapse.util.stringutils import is_ascii, parse_and_validate_server_name
+from synapse.util.stringutils import is_ascii
 
 logger = logging.getLogger(__name__)
 
@@ -83,53 +90,19 @@ INLINE_CONTENT_TYPES = [
     "audio/x-flac",
 ]
 
+# Default timeout_ms for download and thumbnail requests
+DEFAULT_MAX_TIMEOUT_MS = 20_000
 
-def parse_media_id(request: Request) -> Tuple[str, str, Optional[str]]:
-    """Parses the server name, media ID and optional file name from the request URI
-
-    Also performs some rough validation on the server name.
-
-    Args:
-        request: The `Request`.
-
-    Returns:
-        A tuple containing the parsed server name, media ID and optional file name.
-
-    Raises:
-        SynapseError(404): if parsing or validation fail for any reason
-    """
-    try:
-        # The type on postpath seems incorrect in Twisted 21.2.0.
-        postpath: List[bytes] = request.postpath  # type: ignore
-        assert postpath
-
-        # This allows users to append e.g. /test.png to the URL. Useful for
-        # clients that parse the URL to see content type.
-        server_name_bytes, media_id_bytes = postpath[:2]
-        server_name = server_name_bytes.decode("utf-8")
-        media_id = media_id_bytes.decode("utf8")
-
-        # Validate the server name, raising if invalid
-        parse_and_validate_server_name(server_name)
-
-        file_name = None
-        if len(postpath) > 2:
-            try:
-                file_name = urllib.parse.unquote(postpath[-1].decode("utf-8"))
-            except UnicodeDecodeError:
-                pass
-        return server_name, media_id, file_name
-    except Exception:
-        raise SynapseError(
-            404, "Invalid media id token %r" % (request.postpath,), Codes.UNKNOWN
-        )
+# Maximum allowed timeout_ms for download and thumbnail requests
+MAXIMUM_ALLOWED_MAX_TIMEOUT_MS = 60_000
 
 
 def respond_404(request: SynapseRequest) -> None:
+    assert request.path is not None
     respond_with_json(
         request,
         404,
-        cs_error("Not found %r" % (request.postpath,), code=Codes.NOT_FOUND),
+        cs_error("Not found '%s'" % (request.path.decode(),), code=Codes.NOT_FOUND),
         send_cors=True,
     )
 
@@ -188,7 +161,9 @@ def add_file_headers(
 
     # A strict subset of content types is allowed to be inlined  so that they may
     # be viewed directly in a browser. Other file types are forced to be downloads.
-    if media_type.lower() in INLINE_CONTENT_TYPES:
+    #
+    # Only the type & subtype are important, parameters can be ignored.
+    if media_type.lower().split(";", 1)[0] in INLINE_CONTENT_TYPES:
         disposition = "inline"
     else:
         disposition = "attachment"
@@ -372,7 +347,7 @@ class ThumbnailInfo:
     # Content type of thumbnail, e.g. image/png
     type: str
     # The size of the media file, in bytes.
-    length: Optional[int] = None
+    length: int
 
 
 @attr.s(slots=True, frozen=True, auto_attribs=True)

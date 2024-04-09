@@ -32,8 +32,9 @@ case "$SYNAPSE_COMPLEMENT_DATABASE" in
     ;;
 
   sqlite|"")
-    # Configure supervisord not to start Postgres, as we don't need it
-    export START_POSTGRES=false
+    # Set START_POSTGRES to false unless it has already been set
+    # (i.e. by another container image inheriting our own).
+    export START_POSTGRES=${START_POSTGRES:-false}
     ;;
 
   *)
@@ -68,6 +69,11 @@ if [[ -n "$SYNAPSE_COMPLEMENT_USE_WORKERS" ]]; then
 
   fi
   log "Workers requested: $SYNAPSE_WORKER_TYPES"
+  # adjust connection pool limits on worker mode as otherwise running lots of worker synapses
+  # can make docker unhappy (in GHA)
+  export POSTGRES_CP_MIN=1
+  export POSTGRES_CP_MAX=3
+  echo "using reduced connection pool limits for worker mode"
   # Improve startup times by using a launcher based on fork()
   export SYNAPSE_USE_EXPERIMENTAL_FORKING_LAUNCHER=1
 else

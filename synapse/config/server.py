@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2014-2021 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import argparse
 import itertools
@@ -39,7 +46,7 @@ logger = logging.Logger(__name__)
 DIRECT_TCP_ERROR = """
 Using direct TCP replication for workers is no longer supported.
 
-Please see https://matrix-org.github.io/synapse/latest/upgrade.html#direct-tcp-replication-is-no-longer-supported-migrate-to-redis
+Please see https://element-hq.github.io/synapse/latest/upgrade.html#direct-tcp-replication-is-no-longer-supported-migrate-to-redis
 """
 
 # by default, we attempt to listen on both '::' *and* '0.0.0.0' because some OSes
@@ -162,7 +169,7 @@ ROOM_COMPLEXITY_TOO_GREAT = (
 METRICS_PORT_WARNING = """\
 The metrics_port configuration option is deprecated in Synapse 0.31 in favour of
 a listener. Please see
-https://matrix-org.github.io/synapse/latest/metrics-howto.html
+https://element-hq.github.io/synapse/latest/metrics-howto.html
 on how to configure the new listener.
 --------------------------------------------------------------------------------"""
 
@@ -368,9 +375,14 @@ class ServerConfig(Config):
 
         # Whether to enable user presence.
         presence_config = config.get("presence") or {}
-        self.use_presence = presence_config.get("enabled")
-        if self.use_presence is None:
-            self.use_presence = config.get("use_presence", True)
+        presence_enabled = presence_config.get("enabled")
+        if presence_enabled is None:
+            presence_enabled = config.get("use_presence", True)
+
+        # Whether presence is enabled *at all*.
+        self.presence_enabled = bool(presence_enabled)
+        # Whether to internally track presence, requires that presence is enabled,
+        self.track_presence = self.presence_enabled and presence_enabled != "untracked"
 
         # Custom presence router module
         # This is the legacy way of configuring it (the config should now be put in the modules section)

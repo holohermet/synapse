@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2015, 2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import itertools
 import logging
 from collections import defaultdict
@@ -306,12 +313,12 @@ class SyncRestServlet(RestServlet):
 
         # https://github.com/matrix-org/matrix-doc/blob/54255851f642f84a4f1aaf7bc063eebe3d76752b/proposals/2732-olm-fallback-keys.md
         # states that this field should always be included, as long as the server supports the feature.
-        response[
-            "org.matrix.msc2732.device_unused_fallback_key_types"
-        ] = sync_result.device_unused_fallback_key_types
-        response[
-            "device_unused_fallback_key_types"
-        ] = sync_result.device_unused_fallback_key_types
+        response["org.matrix.msc2732.device_unused_fallback_key_types"] = (
+            sync_result.device_unused_fallback_key_types
+        )
+        response["device_unused_fallback_key_types"] = (
+            sync_result.device_unused_fallback_key_types
+        )
 
         if joined:
             response["rooms"][Membership.JOIN] = joined
@@ -384,7 +391,7 @@ class SyncRestServlet(RestServlet):
         """
         invited = {}
         for room in rooms:
-            invite = self._event_serializer.serialize_event(
+            invite = await self._event_serializer.serialize_event(
                 room.invite, time_now, config=serialize_options
             )
             unsigned = dict(invite.get("unsigned", {}))
@@ -415,7 +422,7 @@ class SyncRestServlet(RestServlet):
         """
         knocked = {}
         for room in rooms:
-            knock = self._event_serializer.serialize_event(
+            knock = await self._event_serializer.serialize_event(
                 room.knock, time_now, config=serialize_options
             )
 
@@ -506,10 +513,10 @@ class SyncRestServlet(RestServlet):
                     event.room_id,
                 )
 
-        serialized_state = self._event_serializer.serialize_events(
+        serialized_state = await self._event_serializer.serialize_events(
             state_events, time_now, config=serialize_options
         )
-        serialized_timeline = self._event_serializer.serialize_events(
+        serialized_timeline = await self._event_serializer.serialize_events(
             timeline_events,
             time_now,
             config=serialize_options,
@@ -536,9 +543,9 @@ class SyncRestServlet(RestServlet):
             if room.unread_thread_notifications:
                 result["unread_thread_notifications"] = room.unread_thread_notifications
                 if self._msc3773_enabled:
-                    result[
-                        "org.matrix.msc3773.unread_thread_notifications"
-                    ] = room.unread_thread_notifications
+                    result["org.matrix.msc3773.unread_thread_notifications"] = (
+                        room.unread_thread_notifications
+                    )
             result["summary"] = room.summary
             if self._msc2654_enabled:
                 result["org.matrix.msc2654.unread_count"] = room.unread_count

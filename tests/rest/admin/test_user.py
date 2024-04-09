@@ -1,28 +1,36 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2018-2022 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import hashlib
 import hmac
 import os
 import urllib.parse
 from binascii import unhexlify
-from typing import List, Optional
+from typing import Dict, List, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
 from parameterized import parameterized, parameterized_class
 
 from twisted.test.proto_helpers import MemoryReactor
+from twisted.web.resource import Resource
 
 import synapse.rest.admin
 from synapse.api.constants import ApprovalNoticeMedium, LoginType, UserTypes
@@ -45,7 +53,6 @@ from synapse.types import JsonDict, UserID, create_requester
 from synapse.util import Clock
 
 from tests import unittest
-from tests.server import FakeSite, make_request
 from tests.test_utils import SMALL_PNG
 from tests.unittest import override_config
 
@@ -496,7 +503,7 @@ class UsersListTestCase(unittest.HomeserverTestCase):
 
         channel = self.make_request(
             "GET",
-            self.url + "?deactivated=true",
+            f"{self.url}?deactivated=true",
             {},
             access_token=self.admin_user_tok,
         )
@@ -975,6 +982,56 @@ class UsersListTestCase(unittest.HomeserverTestCase):
         self.assertEqual(1, channel.json_body["total"])
         self.assertFalse(channel.json_body["users"][0]["admin"])
 
+    def test_filter_deactivated_users(self) -> None:
+        """
+        Tests whether the various values of the query parameter `deactivated` lead to the
+        expected result set.
+        """
+        users_url_v3 = self.url.replace("v2", "v3")
+
+        # Register an additional non admin user
+        user_id = self.register_user("user", "pass", admin=False)
+
+        # Deactivate that user, requesting erasure.
+        deactivate_account_handler = self.hs.get_deactivate_account_handler()
+        self.get_success(
+            deactivate_account_handler.deactivate_account(
+                user_id, erase_data=True, requester=create_requester(user_id)
+            )
+        )
+
+        # Query all users
+        channel = self.make_request(
+            "GET",
+            users_url_v3,
+            access_token=self.admin_user_tok,
+        )
+
+        self.assertEqual(200, channel.code, channel.result)
+        self.assertEqual(2, channel.json_body["total"])
+
+        # Query deactivated users
+        channel = self.make_request(
+            "GET",
+            f"{users_url_v3}?deactivated=true",
+            access_token=self.admin_user_tok,
+        )
+
+        self.assertEqual(200, channel.code, channel.result)
+        self.assertEqual(1, channel.json_body["total"])
+        self.assertEqual("@user:test", channel.json_body["users"][0]["name"])
+
+        # Query non-deactivated users
+        channel = self.make_request(
+            "GET",
+            f"{users_url_v3}?deactivated=false",
+            access_token=self.admin_user_tok,
+        )
+
+        self.assertEqual(200, channel.code, channel.result)
+        self.assertEqual(1, channel.json_body["total"])
+        self.assertEqual("@admin:test", channel.json_body["users"][0]["name"])
+
     @override_config(
         {
             "experimental_features": {
@@ -1123,7 +1180,7 @@ class UsersListTestCase(unittest.HomeserverTestCase):
         # They should appear in the list users API, marked as not erased.
         channel = self.make_request(
             "GET",
-            self.url + "?deactivated=true",
+            f"{self.url}?deactivated=true",
             access_token=self.admin_user_tok,
         )
         users = {user["name"]: user for user in channel.json_body["users"]}
@@ -1187,7 +1244,7 @@ class UsersListTestCase(unittest.HomeserverTestCase):
             dir: The direction of ordering to give the server
         """
 
-        url = self.url + "?deactivated=true&"
+        url = f"{self.url}?deactivated=true&"
         if order_by is not None:
             url += "order_by=%s&" % (order_by,)
         if dir is not None and dir in ("b", "f"):
@@ -1478,7 +1535,7 @@ class DeactivateAccountTestCase(unittest.HomeserverTestCase):
     def test_deactivate_user_erase_true_avatar_nonnull_but_empty(self) -> None:
         """Check we can erase a user whose avatar is the empty string.
 
-        Reproduces #12257.
+        Reproduces https://github.com/matrix-org/synapse/issues/12257.
         """
         # Patch `self.other_user` to have an empty string as their avatar.
         self.get_success(
@@ -1632,8 +1689,17 @@ class UserRestTestCase(unittest.HomeserverTestCase):
             )
         )
 
+        self.non_ascii_displayname = "ąćęłńóśżźäöüß中国日本"
+        self.non_ascii_user = self.register_user(
+            "nonascii", "nonascii", displayname=self.non_ascii_displayname
+        )
+
         self.url_prefix = "/_synapse/admin/v2/users/%s"
         self.url_other_user = self.url_prefix % self.other_user
+        self.url_non_ascii_user = (
+            "/_synapse/admin/v2/users?name=%s"
+            % urllib.parse.quote(self.non_ascii_displayname)
+        )
 
     def test_requester_is_no_admin(self) -> None:
         """
@@ -1783,6 +1849,20 @@ class UserRestTestCase(unittest.HomeserverTestCase):
         self.assertEqual("@user:test", channel.json_body["name"])
         self.assertEqual("User", channel.json_body["displayname"])
         self._check_fields(channel.json_body)
+
+    def test_get_user_nonascii_displayname(self) -> None:
+        """
+        Test get user by non-ascii display name
+        """
+        channel = self.make_request(
+            "GET",
+            self.url_non_ascii_user,
+            access_token=self.admin_user_tok,
+        )
+
+        users = {user["name"]: user for user in channel.json_body["users"]}
+        self.assertEqual(200, channel.code, msg=channel.json_body)
+        self.assertIn(self.non_ascii_user, users, channel.json_body["users"])
 
     def test_create_server_admin(self) -> None:
         """
@@ -2706,7 +2786,7 @@ class UserRestTestCase(unittest.HomeserverTestCase):
         # is in user directory
         profile = self.get_success(self.store._get_user_in_directory(self.other_user))
         assert profile is not None
-        self.assertTrue(profile["display_name"] == "User")
+        self.assertEqual(profile[0], "User")
 
         # Deactivate user
         channel = self.make_request(
@@ -2741,7 +2821,7 @@ class UserRestTestCase(unittest.HomeserverTestCase):
         profile = self.get_success(self.store._get_user_in_directory(self.other_user))
         self.assertIsNone(profile)
 
-    def test_reactivate_user(self) -> None:
+    def test_reactivate_user_with_password(self) -> None:
         """
         Test reactivating another user.
         """
@@ -2749,21 +2829,36 @@ class UserRestTestCase(unittest.HomeserverTestCase):
         # Deactivate the user.
         self._deactivate_user("@user:test")
 
-        # Attempt to reactivate the user (without a password).
-        channel = self.make_request(
-            "PUT",
-            self.url_other_user,
-            access_token=self.admin_user_tok,
-            content={"deactivated": False},
-        )
-        self.assertEqual(400, channel.code, msg=channel.json_body)
-
-        # Reactivate the user.
+        # Reactivate the user with password.
         channel = self.make_request(
             "PUT",
             self.url_other_user,
             access_token=self.admin_user_tok,
             content={"deactivated": False, "password": "foo"},
+        )
+        self.assertEqual(200, channel.code, msg=channel.json_body)
+        self.assertEqual("@user:test", channel.json_body["name"])
+        self.assertFalse(channel.json_body["deactivated"])
+        self._is_erased("@user:test", False)
+
+        # This key was removed intentionally. Ensure it is not accidentally re-included.
+        self.assertNotIn("password_hash", channel.json_body)
+
+    def test_reactivate_user_without_password(self) -> None:
+        """
+        Test reactivating another user without a password.
+        This can be using some local users and some user with SSO (password = `null`).
+        """
+
+        # Deactivate the user.
+        self._deactivate_user("@user:test")
+
+        # Reactivate the user without a password.
+        channel = self.make_request(
+            "PUT",
+            self.url_other_user,
+            access_token=self.admin_user_tok,
+            content={"deactivated": False},
         )
         self.assertEqual(200, channel.code, msg=channel.json_body)
         self.assertEqual("@user:test", channel.json_body["name"])
@@ -2782,7 +2877,7 @@ class UserRestTestCase(unittest.HomeserverTestCase):
         # Deactivate the user.
         self._deactivate_user("@user:test")
 
-        # Reactivate the user with a password
+        # Reactivate the user with a password.
         channel = self.make_request(
             "PUT",
             self.url_other_user,
@@ -2816,7 +2911,7 @@ class UserRestTestCase(unittest.HomeserverTestCase):
         # Deactivate the user.
         self._deactivate_user("@user:test")
 
-        # Reactivate the user with a password
+        # Reactivate the user with a password.
         channel = self.make_request(
             "PUT",
             self.url_other_user,
@@ -3421,7 +3516,6 @@ class UserMediaRestTestCase(unittest.HomeserverTestCase):
 
     def prepare(self, reactor: MemoryReactor, clock: Clock, hs: HomeServer) -> None:
         self.store = hs.get_datastores().main
-        self.media_repo = hs.get_media_repository_resource()
         self.filepaths = MediaFilePaths(hs.config.media.media_store_path)
 
         self.admin_user = self.register_user("admin", "pass", admin=True)
@@ -3431,6 +3525,11 @@ class UserMediaRestTestCase(unittest.HomeserverTestCase):
         self.url = "/_synapse/admin/v1/users/%s/media" % urllib.parse.quote(
             self.other_user
         )
+
+    def create_resource_dict(self) -> Dict[str, Resource]:
+        resources = super().create_resource_dict()
+        resources["/_matrix/media"] = self.hs.get_media_repository_resource()
+        return resources
 
     @parameterized.expand(["GET", "DELETE"])
     def test_no_auth(self, method: str) -> None:
@@ -3907,12 +4006,9 @@ class UserMediaRestTestCase(unittest.HomeserverTestCase):
         Returns:
             The ID of the newly created media.
         """
-        upload_resource = self.media_repo.children[b"upload"]
-        download_resource = self.media_repo.children[b"download"]
-
         # Upload some media into the room
         response = self.helper.upload_media(
-            upload_resource, image_data, user_token, filename, expect_code=200
+            image_data, user_token, filename, expect_code=200
         )
 
         # Extract media ID from the response
@@ -3920,11 +4016,9 @@ class UserMediaRestTestCase(unittest.HomeserverTestCase):
         media_id = server_and_media_id.split("/")[1]
 
         # Try to access a media and to create `last_access_ts`
-        channel = make_request(
-            self.reactor,
-            FakeSite(download_resource, self.reactor),
+        channel = self.make_request(
             "GET",
-            server_and_media_id,
+            f"/_matrix/media/v3/download/{server_and_media_id}",
             shorthand=False,
             access_token=user_token,
         )
@@ -4855,3 +4949,59 @@ class UsersByThreePidTestCase(unittest.HomeserverTestCase):
             {"user_id": self.other_user},
             channel.json_body,
         )
+
+
+class AllowCrossSigningReplacementTestCase(unittest.HomeserverTestCase):
+    servlets = [
+        synapse.rest.admin.register_servlets,
+        login.register_servlets,
+    ]
+
+    @staticmethod
+    def url(user: str) -> str:
+        template = (
+            "/_synapse/admin/v1/users/{}/_allow_cross_signing_replacement_without_uia"
+        )
+        return template.format(urllib.parse.quote(user))
+
+    def prepare(self, reactor: MemoryReactor, clock: Clock, hs: HomeServer) -> None:
+        self.store = hs.get_datastores().main
+
+        self.admin_user = self.register_user("admin", "pass", admin=True)
+        self.admin_user_tok = self.login("admin", "pass")
+
+        self.other_user = self.register_user("user", "pass")
+
+    def test_error_cases(self) -> None:
+        fake_user = "@bums:other"
+        channel = self.make_request(
+            "POST", self.url(fake_user), access_token=self.admin_user_tok
+        )
+        # Fail: user doesn't exist
+        self.assertEqual(404, channel.code, msg=channel.json_body)
+
+        channel = self.make_request(
+            "POST", self.url(self.other_user), access_token=self.admin_user_tok
+        )
+        # Fail: user exists, but has no master cross-signing key
+        self.assertEqual(404, channel.code, msg=channel.json_body)
+
+    def test_success(self) -> None:
+        # Upload a master key.
+        dummy_key = {"keys": {"a": "b"}}
+        self.get_success(
+            self.store.set_e2e_cross_signing_key(self.other_user, "master", dummy_key)
+        )
+
+        channel = self.make_request(
+            "POST", self.url(self.other_user), access_token=self.admin_user_tok
+        )
+        # Success!
+        self.assertEqual(200, channel.code, msg=channel.json_body)
+
+        # Should now find that the key exists.
+        _, timestamp = self.get_success(
+            self.store.get_master_cross_signing_key_updatable_before(self.other_user)
+        )
+        assert timestamp is not None
+        self.assertGreater(timestamp, self.clock.time_msec())

@@ -1,18 +1,24 @@
-# Copyright 2014-2016 OpenMarket Ltd
-# Copyright 2018 New Vector Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2021 The Matrix.org Foundation C.I.C.
+# Copyright 2014-2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import logging
 from typing import Any, Dict, Iterable, List, Mapping, Tuple, cast
@@ -45,14 +51,17 @@ class TagsWorkerStore(AccountDataWorkerStore):
             tag content.
         """
 
-        rows = await self.db_pool.simple_select_list(
-            "room_tags", {"user_id": user_id}, ["room_id", "tag", "content"]
+        rows = cast(
+            List[Tuple[str, str, str]],
+            await self.db_pool.simple_select_list(
+                "room_tags", {"user_id": user_id}, ["room_id", "tag", "content"]
+            ),
         )
 
         tags_by_room: Dict[str, Dict[str, JsonDict]] = {}
-        for row in rows:
-            room_tags = tags_by_room.setdefault(row["room_id"], {})
-            room_tags[row["tag"]] = db_to_json(row["content"])
+        for room_id, tag, content in rows:
+            room_tags = tags_by_room.setdefault(room_id, {})
+            room_tags[tag] = db_to_json(content)
         return tags_by_room
 
     async def get_all_updated_tags(
@@ -161,13 +170,16 @@ class TagsWorkerStore(AccountDataWorkerStore):
         Returns:
             A mapping of tags to tag content.
         """
-        rows = await self.db_pool.simple_select_list(
-            table="room_tags",
-            keyvalues={"user_id": user_id, "room_id": room_id},
-            retcols=("tag", "content"),
-            desc="get_tags_for_room",
+        rows = cast(
+            List[Tuple[str, str]],
+            await self.db_pool.simple_select_list(
+                table="room_tags",
+                keyvalues={"user_id": user_id, "room_id": room_id},
+                retcols=("tag", "content"),
+                desc="get_tags_for_room",
+            ),
         )
-        return {row["tag"]: db_to_json(row["content"]) for row in rows}
+        return {tag: db_to_json(content) for tag, content in rows}
 
     async def add_tag_to_room(
         self, user_id: str, room_id: str, tag: str, content: JsonDict

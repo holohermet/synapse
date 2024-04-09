@@ -50,11 +50,13 @@ comment these options out and use those specified by the module instead.
 
 A custom mapping provider must specify the following methods:
 
-* `def __init__(self, parsed_config)`
+* `def __init__(self, parsed_config, module_api)`
    - Arguments:
      - `parsed_config` - A configuration object that is the return value of the
        `parse_config` method. You should set any configuration options needed by
        the module here.
+     - `module_api` - a `synapse.module_api.ModuleApi` object which provides the
+       stable API available for extension modules.
 * `def parse_config(config)`
     - This method should have the `@staticmethod` decoration.
     - Arguments:
@@ -115,7 +117,7 @@ A custom mapping provider must specify the following methods:
 
 Synapse has a built-in OpenID mapping provider if a custom provider isn't
 specified in the config. It is located at
-[`synapse.handlers.oidc.JinjaOidcMappingProvider`](https://github.com/matrix-org/synapse/blob/develop/synapse/handlers/oidc.py).
+[`synapse.handlers.oidc.JinjaOidcMappingProvider`](https://github.com/element-hq/synapse/blob/develop/synapse/handlers/oidc.py).
 
 ## SAML Mapping Providers
 
@@ -202,4 +204,4 @@ A custom mapping provider must specify the following methods:
 
 Synapse has a built-in SAML mapping provider if a custom provider isn't
 specified in the config. It is located at
-[`synapse.handlers.saml.DefaultSamlMappingProvider`](https://github.com/matrix-org/synapse/blob/develop/synapse/handlers/saml.py).
+[`synapse.handlers.saml.DefaultSamlMappingProvider`](https://github.com/element-hq/synapse/blob/develop/synapse/handlers/saml.py).

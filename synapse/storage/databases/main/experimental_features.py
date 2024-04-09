@@ -1,18 +1,25 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2023 The Matrix.org Foundation C.I.C
+# Copyright (C) 2023 New Vector, Ltd
 #
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
-from typing import TYPE_CHECKING, Dict, FrozenSet
+from typing import TYPE_CHECKING, Dict, FrozenSet, List, Tuple, cast
 
 from synapse.storage.database import DatabasePool, LoggingDatabaseConnection
 from synapse.storage.databases.main import CacheInvalidationWorkerStore
@@ -42,13 +49,16 @@ class ExperimentalFeaturesStore(CacheInvalidationWorkerStore):
         Returns:
             the features currently enabled for the user
         """
-        enabled = await self.db_pool.simple_select_list(
-            "per_user_experimental_features",
-            {"user_id": user_id, "enabled": True},
-            ["feature"],
+        enabled = cast(
+            List[Tuple[str]],
+            await self.db_pool.simple_select_list(
+                table="per_user_experimental_features",
+                keyvalues={"user_id": user_id, "enabled": True},
+                retcols=("feature",),
+            ),
         )
 
-        return frozenset(feature["feature"] for feature in enabled)
+        return frozenset(feature[0] for feature in enabled)
 
     async def set_features_for_user(
         self,

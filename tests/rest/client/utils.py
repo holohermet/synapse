@@ -1,19 +1,25 @@
-# Copyright 2014-2016 OpenMarket Ltd
-# Copyright 2017 Vector Creations Ltd
-# Copyright 2018-2019 New Vector Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2019-2021 The Matrix.org Foundation C.I.C.
+# Copyright 2017 Vector Creations Ltd
+# Copyright 2014-2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import json
 import re
@@ -37,7 +43,6 @@ import attr
 from typing_extensions import Literal
 
 from twisted.test.proto_helpers import MemoryReactorClock
-from twisted.web.resource import Resource
 from twisted.web.server import Site
 
 from synapse.api.constants import Membership
@@ -45,7 +50,7 @@ from synapse.api.errors import Codes
 from synapse.server import HomeServer
 from synapse.types import JsonDict
 
-from tests.server import FakeChannel, FakeSite, make_request
+from tests.server import FakeChannel, make_request
 from tests.test_utils.html_parsers import TestHtmlParser
 from tests.test_utils.oidc import FakeAuthorizationGrant, FakeOidcServer
 
@@ -82,8 +87,7 @@ class RestHelper:
         expect_code: Literal[200] = ...,
         extra_content: Optional[Dict] = ...,
         custom_headers: Optional[Iterable[Tuple[AnyStr, AnyStr]]] = ...,
-    ) -> str:
-        ...
+    ) -> str: ...
 
     @overload
     def create_room_as(
@@ -95,8 +99,7 @@ class RestHelper:
         expect_code: int = ...,
         extra_content: Optional[Dict] = ...,
         custom_headers: Optional[Iterable[Tuple[AnyStr, AnyStr]]] = ...,
-    ) -> Optional[str]:
-        ...
+    ) -> Optional[str]: ...
 
     def create_room_as(
         self,
@@ -362,6 +365,7 @@ class RestHelper:
         tok: Optional[str] = None,
         expect_code: int = HTTPStatus.OK,
         custom_headers: Optional[Iterable[Tuple[AnyStr, AnyStr]]] = None,
+        type: str = "m.room.message",
     ) -> JsonDict:
         if body is None:
             body = "body_text_here"
@@ -370,7 +374,7 @@ class RestHelper:
 
         return self.send_event(
             room_id,
-            "m.room.message",
+            type,
             content,
             txn_id,
             tok,
@@ -558,7 +562,6 @@ class RestHelper:
 
     def upload_media(
         self,
-        resource: Resource,
         image_data: bytes,
         tok: str,
         filename: str = "test.png",
@@ -576,7 +579,7 @@ class RestHelper:
         path = "/_matrix/media/r0/upload?filename=%s" % (filename,)
         channel = make_request(
             self.reactor,
-            FakeSite(resource, self.reactor),
+            self.site,
             "POST",
             path,
             content=image_data,

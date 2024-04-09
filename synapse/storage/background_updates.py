@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2014-2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import abc
 import logging
 from enum import Enum, IntEnum
@@ -28,6 +35,7 @@ from typing import (
     Sequence,
     Tuple,
     Type,
+    cast,
 )
 
 import attr
@@ -48,7 +56,11 @@ else:
 
 if TYPE_CHECKING:
     from synapse.server import HomeServer
-    from synapse.storage.database import DatabasePool, LoggingTransaction
+    from synapse.storage.database import (
+        DatabasePool,
+        LoggingDatabaseConnection,
+        LoggingTransaction,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -488,14 +500,14 @@ class BackgroundUpdater:
             True if we have finished running all the background updates, otherwise False
         """
 
-        def get_background_updates_txn(txn: Cursor) -> List[Dict[str, Any]]:
+        def get_background_updates_txn(txn: Cursor) -> List[Tuple[str, Optional[str]]]:
             txn.execute(
                 """
                 SELECT update_name, depends_on FROM background_updates
                 ORDER BY ordering, update_name
                 """
             )
-            return self.db_pool.cursor_to_dict(txn)
+            return cast(List[Tuple[str, Optional[str]]], txn.fetchall())
 
         if not self._current_background_update:
             all_pending_updates = await self.db_pool.runInteraction(
@@ -507,14 +519,13 @@ class BackgroundUpdater:
                 return True
 
             # find the first update which isn't dependent on another one in the queue.
-            pending = {update["update_name"] for update in all_pending_updates}
-            for upd in all_pending_updates:
-                depends_on = upd["depends_on"]
+            pending = {update_name for update_name, depends_on in all_pending_updates}
+            for update_name, depends_on in all_pending_updates:
                 if not depends_on or depends_on not in pending:
                     break
                 logger.info(
                     "Not starting on bg update %s until %s is done",
-                    upd["update_name"],
+                    update_name,
                     depends_on,
                 )
             else:
@@ -524,7 +535,7 @@ class BackgroundUpdater:
                     "another: dependency cycle?"
                 )
 
-            self._current_background_update = upd["update_name"]
+            self._current_background_update = update_name
 
         # We have a background update to run, otherwise we would have returned
         # early.
@@ -746,10 +757,10 @@ class BackgroundUpdater:
                 The named index will be dropped upon completion of the new index.
         """
 
-        def create_index_psql(conn: Connection) -> None:
+        def create_index_psql(conn: "LoggingDatabaseConnection") -> None:
             conn.rollback()
             # postgres insists on autocommit for the index
-            conn.set_session(autocommit=True)  # type: ignore
+            conn.engine.attempt_to_set_autocommit(conn.conn, True)
 
             try:
                 c = conn.cursor()
@@ -793,9 +804,9 @@ class BackgroundUpdater:
                 undo_timeout_sql = f"SET statement_timeout = {default_timeout}"
                 conn.cursor().execute(undo_timeout_sql)
 
-                conn.set_session(autocommit=False)  # type: ignore
+                conn.engine.attempt_to_set_autocommit(conn.conn, False)
 
-        def create_index_sqlite(conn: Connection) -> None:
+        def create_index_sqlite(conn: "LoggingDatabaseConnection") -> None:
             # Sqlite doesn't support concurrent creation of indexes.
             #
             # We assume that sqlite doesn't give us invalid indices; however
@@ -825,7 +836,9 @@ class BackgroundUpdater:
                 c.execute(sql)
 
         if isinstance(self.db_pool.engine, engines.PostgresEngine):
-            runner: Optional[Callable[[Connection], None]] = create_index_psql
+            runner: Optional[Callable[[LoggingDatabaseConnection], None]] = (
+                create_index_psql
+            )
         elif psql_only:
             runner = None
         else:

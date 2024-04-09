@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2014-2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -20,6 +27,7 @@ from typing import (
     Mapping,
     Optional,
     Tuple,
+    Union,
     cast,
 )
 
@@ -260,27 +268,40 @@ class PresenceStore(PresenceBackgroundUpdateStore, CacheInvalidationWorkerStore)
     async def get_presence_for_users(
         self, user_ids: Iterable[str]
     ) -> Mapping[str, UserPresenceState]:
-        rows = await self.db_pool.simple_select_many_batch(
-            table="presence_stream",
-            column="user_id",
-            iterable=user_ids,
-            keyvalues={},
-            retcols=(
-                "user_id",
-                "state",
-                "last_active_ts",
-                "last_federation_update_ts",
-                "last_user_sync_ts",
-                "status_msg",
-                "currently_active",
+        # TODO All these columns are nullable, but we don't expect that:
+        #      https://github.com/matrix-org/synapse/issues/16467
+        rows = cast(
+            List[Tuple[str, str, int, int, int, Optional[str], Union[int, bool]]],
+            await self.db_pool.simple_select_many_batch(
+                table="presence_stream",
+                column="user_id",
+                iterable=user_ids,
+                keyvalues={},
+                retcols=(
+                    "user_id",
+                    "state",
+                    "last_active_ts",
+                    "last_federation_update_ts",
+                    "last_user_sync_ts",
+                    "status_msg",
+                    "currently_active",
+                ),
+                desc="get_presence_for_users",
             ),
-            desc="get_presence_for_users",
         )
 
-        for row in rows:
-            row["currently_active"] = bool(row["currently_active"])
-
-        return {row["user_id"]: UserPresenceState(**row) for row in rows}
+        return {
+            user_id: UserPresenceState(
+                user_id=user_id,
+                state=state,
+                last_active_ts=last_active_ts,
+                last_federation_update_ts=last_federation_update_ts,
+                last_user_sync_ts=last_user_sync_ts,
+                status_msg=status_msg,
+                currently_active=bool(currently_active),
+            )
+            for user_id, state, last_active_ts, last_federation_update_ts, last_user_sync_ts, status_msg, currently_active in rows
+        }
 
     async def should_user_receive_full_presence_with_token(
         self,
@@ -349,10 +370,11 @@ class PresenceStore(PresenceBackgroundUpdateStore, CacheInvalidationWorkerStore)
                 # for their user ID.
                 value_values=[(presence_stream_id,) for _ in user_ids],
             )
-            for user_id in user_ids:
-                self._invalidate_cache_and_stream(
-                    txn, self._get_full_presence_stream_token_for_user, (user_id,)
-                )
+            self._invalidate_cache_and_stream_bulk(
+                txn,
+                self._get_full_presence_stream_token_for_user,
+                [(user_id,) for user_id in user_ids],
+            )
 
         return await self.db_pool.runInteraction(
             "add_users_to_send_full_presence_to", _add_users_to_send_full_presence_to
@@ -385,28 +407,49 @@ class PresenceStore(PresenceBackgroundUpdateStore, CacheInvalidationWorkerStore)
         limit = 100
         offset = 0
         while True:
-            rows = await self.db_pool.runInteraction(
-                "get_presence_for_all_users",
-                self.db_pool.simple_select_list_paginate_txn,
-                "presence_stream",
-                orderby="stream_id",
-                start=offset,
-                limit=limit,
-                exclude_keyvalues=exclude_keyvalues,
-                retcols=(
-                    "user_id",
-                    "state",
-                    "last_active_ts",
-                    "last_federation_update_ts",
-                    "last_user_sync_ts",
-                    "status_msg",
-                    "currently_active",
+            # TODO All these columns are nullable, but we don't expect that:
+            #      https://github.com/matrix-org/synapse/issues/16467
+            rows = cast(
+                List[Tuple[str, str, int, int, int, Optional[str], Union[int, bool]]],
+                await self.db_pool.runInteraction(
+                    "get_presence_for_all_users",
+                    self.db_pool.simple_select_list_paginate_txn,
+                    "presence_stream",
+                    orderby="stream_id",
+                    start=offset,
+                    limit=limit,
+                    exclude_keyvalues=exclude_keyvalues,
+                    retcols=(
+                        "user_id",
+                        "state",
+                        "last_active_ts",
+                        "last_federation_update_ts",
+                        "last_user_sync_ts",
+                        "status_msg",
+                        "currently_active",
+                    ),
+                    order_direction="ASC",
                 ),
-                order_direction="ASC",
             )
 
-            for row in rows:
-                users_to_state[row["user_id"]] = UserPresenceState(**row)
+            for (
+                user_id,
+                state,
+                last_active_ts,
+                last_federation_update_ts,
+                last_user_sync_ts,
+                status_msg,
+                currently_active,
+            ) in rows:
+                users_to_state[user_id] = UserPresenceState(
+                    user_id=user_id,
+                    state=state,
+                    last_active_ts=last_active_ts,
+                    last_federation_update_ts=last_federation_update_ts,
+                    last_user_sync_ts=last_user_sync_ts,
+                    status_msg=status_msg,
+                    currently_active=bool(currently_active),
+                )
 
             # We've run out of updates to query
             if len(rows) < limit:
@@ -434,13 +477,21 @@ class PresenceStore(PresenceBackgroundUpdateStore, CacheInvalidationWorkerStore)
 
         txn = db_conn.cursor()
         txn.execute(sql, (PresenceState.OFFLINE,))
-        rows = self.db_pool.cursor_to_dict(txn)
+        rows = txn.fetchall()
         txn.close()
 
-        for row in rows:
-            row["currently_active"] = bool(row["currently_active"])
-
-        return [UserPresenceState(**row) for row in rows]
+        return [
+            UserPresenceState(
+                user_id=user_id,
+                state=state,
+                last_active_ts=last_active_ts,
+                last_federation_update_ts=last_federation_update_ts,
+                last_user_sync_ts=last_user_sync_ts,
+                status_msg=status_msg,
+                currently_active=bool(currently_active),
+            )
+            for user_id, state, last_active_ts, last_federation_update_ts, last_user_sync_ts, status_msg, currently_active in rows
+        ]
 
     def take_presence_startup_info(self) -> List[UserPresenceState]:
         active_on_startup = self._presence_on_startup

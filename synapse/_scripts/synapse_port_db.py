@@ -1,19 +1,25 @@
 #!/usr/bin/env python
-# Copyright 2015, 2016 OpenMarket Ltd
-# Copyright 2018 New Vector Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2019 The Matrix.org Foundation C.I.C.
+# Copyright 2015, 2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import argparse
 import curses
@@ -191,7 +197,7 @@ IGNORED_TABLES = {
     "user_directory_search_stat",
     "user_directory_search_pos",
     "users_who_share_private_rooms",
-    "users_in_public_room",
+    "users_in_public_rooms",
     # UI auth sessions have foreign keys so additional care needs to be taken,
     # the sessions are transient anyway, so ignore them.
     "ui_auth_sessions",
@@ -348,8 +354,7 @@ class Porter:
                     backward_chunk = 0
                     already_ported = 0
             else:
-                forward_chunk = row["forward_rowid"]
-                backward_chunk = row["backward_rowid"]
+                forward_chunk, backward_chunk = row
 
             if total_to_port is None:
                 already_ported, total_to_port = await self._get_total_count_to_port(
@@ -1035,10 +1040,10 @@ class Porter:
         return done, remaining + done
 
     async def _setup_state_group_id_seq(self) -> None:
-        curr_id: Optional[
-            int
-        ] = await self.sqlite_store.db_pool.simple_select_one_onecol(
-            table="state_groups", keyvalues={}, retcol="MAX(id)", allow_none=True
+        curr_id: Optional[int] = (
+            await self.sqlite_store.db_pool.simple_select_one_onecol(
+                table="state_groups", keyvalues={}, retcol="MAX(id)", allow_none=True
+            )
         )
 
         if not curr_id:
@@ -1127,13 +1132,13 @@ class Porter:
         )
 
     async def _setup_auth_chain_sequence(self) -> None:
-        curr_chain_id: Optional[
-            int
-        ] = await self.sqlite_store.db_pool.simple_select_one_onecol(
-            table="event_auth_chains",
-            keyvalues={},
-            retcol="MAX(chain_id)",
-            allow_none=True,
+        curr_chain_id: Optional[int] = (
+            await self.sqlite_store.db_pool.simple_select_one_onecol(
+                table="event_auth_chains",
+                keyvalues={},
+                retcol="MAX(chain_id)",
+                allow_none=True,
+            )
         )
 
         def r(txn: LoggingTransaction) -> None:

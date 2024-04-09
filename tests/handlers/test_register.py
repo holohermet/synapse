@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2015, 2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 from typing import Any, Collection, List, Optional, Tuple
 from unittest.mock import AsyncMock, Mock
@@ -342,10 +349,10 @@ class RegistrationTestCase(unittest.HomeserverTestCase):
         # Ensure the room is properly not federated.
         room = self.get_success(self.store.get_room_with_stats(room_id["room_id"]))
         assert room is not None
-        self.assertFalse(room["federatable"])
-        self.assertFalse(room["public"])
-        self.assertEqual(room["join_rules"], "public")
-        self.assertIsNone(room["guest_access"])
+        self.assertFalse(room.federatable)
+        self.assertFalse(room.public)
+        self.assertEqual(room.join_rules, "public")
+        self.assertIsNone(room.guest_access)
 
         # The user should be in the room.
         rooms = self.get_success(self.store.get_rooms_for_user(user_id))
@@ -372,7 +379,7 @@ class RegistrationTestCase(unittest.HomeserverTestCase):
         # Ensure the room is properly a public room.
         room = self.get_success(self.store.get_room_with_stats(room_id["room_id"]))
         assert room is not None
-        self.assertEqual(room["join_rules"], "public")
+        self.assertEqual(room.join_rules, "public")
 
         # Both users should be in the room.
         rooms = self.get_success(self.store.get_rooms_for_user(inviter))
@@ -411,9 +418,9 @@ class RegistrationTestCase(unittest.HomeserverTestCase):
         # Ensure the room is properly a private room.
         room = self.get_success(self.store.get_room_with_stats(room_id["room_id"]))
         assert room is not None
-        self.assertFalse(room["public"])
-        self.assertEqual(room["join_rules"], "invite")
-        self.assertEqual(room["guest_access"], "can_join")
+        self.assertFalse(room.public)
+        self.assertEqual(room.join_rules, "invite")
+        self.assertEqual(room.guest_access, "can_join")
 
         # Both users should be in the room.
         rooms = self.get_success(self.store.get_rooms_for_user(inviter))
@@ -455,9 +462,9 @@ class RegistrationTestCase(unittest.HomeserverTestCase):
         # Ensure the room is properly a private room.
         room = self.get_success(self.store.get_room_with_stats(room_id["room_id"]))
         assert room is not None
-        self.assertFalse(room["public"])
-        self.assertEqual(room["join_rules"], "invite")
-        self.assertEqual(room["guest_access"], "can_join")
+        self.assertFalse(room.public)
+        self.assertEqual(room.join_rules, "invite")
+        self.assertEqual(room.guest_access, "can_join")
 
         # Both users should be in the room.
         rooms = self.get_success(self.store.get_rooms_for_user(inviter))

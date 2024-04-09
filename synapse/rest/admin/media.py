@@ -1,21 +1,29 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2014-2016 OpenMarket Ltd
-# Copyright 2018-2019 New Vector Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import logging
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Optional, Tuple
+
+import attr
 
 from synapse.api.constants import Direction
 from synapse.api.errors import Codes, NotFoundError, SynapseError
@@ -418,7 +426,7 @@ class UserMediaRestServlet(RestServlet):
             start, limit, user_id, order_by, direction
         )
 
-        ret = {"media": media, "total": total}
+        ret = {"media": [attr.asdict(m) for m in media], "total": total}
         if (start + limit) < total:
             ret["next_token"] = start + len(media)
 
@@ -477,7 +485,7 @@ class UserMediaRestServlet(RestServlet):
         )
 
         deleted_media, total = await self.media_repository.delete_local_media_ids(
-            [row["media_id"] for row in media]
+            [m.media_id for m in media]
         )
 
         return HTTPStatus.OK, {"deleted_media": deleted_media, "total": total}

@@ -1,19 +1,25 @@
-# Copyright 2016 OpenMarket Ltd
-# Copyright 2017 Vector Creations Ltd
-# Copyright 2018-2019 New Vector Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2019 The Matrix.org Foundation C.I.C.
+# Copyright 2017 Vector Creations Ltd
+# Copyright 2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import logging
 import re
@@ -80,6 +86,9 @@ class VersionsRestServlet(RestServlet):
                     "v1.4",
                     "v1.5",
                     "v1.6",
+                    "v1.7",
+                    "v1.8",
+                    "v1.9",
                 ],
                 # as per MSC1497:
                 "unstable_features": {
@@ -126,6 +135,10 @@ class VersionsRestServlet(RestServlet):
                     "org.matrix.msc3981": self.config.experimental.msc3981_recurse_relations,
                     # Adds support for deleting account data.
                     "org.matrix.msc3391": self.config.experimental.msc3391_enabled,
+                    # Allows clients to inhibit profile update propagation.
+                    "org.matrix.msc4069": self.config.experimental.msc4069_profile_inhibit_propagation,
+                    # Allows clients to handle push for encrypted events.
+                    "org.matrix.msc4028": self.config.experimental.msc4028_push_encrypted_events,
                 },
             },
         )

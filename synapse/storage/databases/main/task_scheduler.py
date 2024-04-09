@@ -1,18 +1,25 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2023 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, cast
 
 from synapse.storage._base import SQLBaseStore, db_to_json
 from synapse.storage.database import (
@@ -27,6 +34,8 @@ from synapse.util import json_encoder
 if TYPE_CHECKING:
     from synapse.server import HomeServer
 
+ScheduledTaskRow = Tuple[str, str, str, int, str, str, str, str]
+
 
 class TaskSchedulerWorkerStore(SQLBaseStore):
     def __init__(
@@ -38,13 +47,18 @@ class TaskSchedulerWorkerStore(SQLBaseStore):
         super().__init__(database, db_conn, hs)
 
     @staticmethod
-    def _convert_row_to_task(row: Dict[str, Any]) -> ScheduledTask:
-        row["status"] = TaskStatus(row["status"])
-        if row["params"] is not None:
-            row["params"] = db_to_json(row["params"])
-        if row["result"] is not None:
-            row["result"] = db_to_json(row["result"])
-        return ScheduledTask(**row)
+    def _convert_row_to_task(row: ScheduledTaskRow) -> ScheduledTask:
+        task_id, action, status, timestamp, resource_id, params, result, error = row
+        return ScheduledTask(
+            id=task_id,
+            action=action,
+            status=TaskStatus(status),
+            timestamp=timestamp,
+            resource_id=resource_id,
+            params=db_to_json(params) if params is not None else None,
+            result=db_to_json(result) if result is not None else None,
+            error=error,
+        )
 
     async def get_scheduled_tasks(
         self,
@@ -68,7 +82,7 @@ class TaskSchedulerWorkerStore(SQLBaseStore):
         Returns: a list of `ScheduledTask`, ordered by increasing timestamps
         """
 
-        def get_scheduled_tasks_txn(txn: LoggingTransaction) -> List[Dict[str, Any]]:
+        def get_scheduled_tasks_txn(txn: LoggingTransaction) -> List[ScheduledTaskRow]:
             clauses: List[str] = []
             args: List[Any] = []
             if resource_id:
@@ -101,7 +115,7 @@ class TaskSchedulerWorkerStore(SQLBaseStore):
                 args.append(limit)
 
             txn.execute(sql, args)
-            return self.db_pool.cursor_to_dict(txn)
+            return cast(List[ScheduledTaskRow], txn.fetchall())
 
         rows = await self.db_pool.runInteraction(
             "get_scheduled_tasks", get_scheduled_tasks_txn
@@ -122,12 +136,12 @@ class TaskSchedulerWorkerStore(SQLBaseStore):
                 "status": task.status,
                 "timestamp": task.timestamp,
                 "resource_id": task.resource_id,
-                "params": None
-                if task.params is None
-                else json_encoder.encode(task.params),
-                "result": None
-                if task.result is None
-                else json_encoder.encode(task.result),
+                "params": (
+                    None if task.params is None else json_encoder.encode(task.params)
+                ),
+                "result": (
+                    None if task.result is None else json_encoder.encode(task.result)
+                ),
                 "error": task.error,
             },
             desc="insert_scheduled_task",
@@ -176,21 +190,24 @@ class TaskSchedulerWorkerStore(SQLBaseStore):
 
         Returns: the task if available, `None` otherwise
         """
-        row = await self.db_pool.simple_select_one(
-            table="scheduled_tasks",
-            keyvalues={"id": id},
-            retcols=(
-                "id",
-                "action",
-                "status",
-                "timestamp",
-                "resource_id",
-                "params",
-                "result",
-                "error",
+        row = cast(
+            Optional[ScheduledTaskRow],
+            await self.db_pool.simple_select_one(
+                table="scheduled_tasks",
+                keyvalues={"id": id},
+                retcols=(
+                    "id",
+                    "action",
+                    "status",
+                    "timestamp",
+                    "resource_id",
+                    "params",
+                    "result",
+                    "error",
+                ),
+                allow_none=True,
+                desc="get_scheduled_task",
             ),
-            allow_none=True,
-            desc="get_scheduled_task",
         )
 
         return TaskSchedulerWorkerStore._convert_row_to_task(row) if row else None

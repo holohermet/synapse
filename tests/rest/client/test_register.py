@@ -1,18 +1,24 @@
-# Copyright 2014-2016 OpenMarket Ltd
-# Copyright 2017-2018 New Vector Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2019 The Matrix.org Foundation C.I.C.
+# Copyright 2014-2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import datetime
 import os
 from typing import Any, Dict, List, Tuple
@@ -270,15 +276,15 @@ class RegisterRestServletTestCase(unittest.HomeserverTestCase):
         self.assertLessEqual(det_data.items(), channel.json_body.items())
 
         # Check the `completed` counter has been incremented and pending is 0
-        res = self.get_success(
+        pending, completed = self.get_success(
             store.db_pool.simple_select_one(
                 "registration_tokens",
                 keyvalues={"token": token},
                 retcols=["pending", "completed"],
             )
         )
-        self.assertEqual(res["completed"], 1)
-        self.assertEqual(res["pending"], 0)
+        self.assertEqual(completed, 1)
+        self.assertEqual(pending, 0)
 
     @override_config({"registration_requires_token": True})
     def test_POST_registration_token_invalid(self) -> None:
@@ -372,15 +378,15 @@ class RegisterRestServletTestCase(unittest.HomeserverTestCase):
         params1["auth"]["type"] = LoginType.DUMMY
         self.make_request(b"POST", self.url, params1)
         # Check pending=0 and completed=1
-        res = self.get_success(
+        pending, completed = self.get_success(
             store.db_pool.simple_select_one(
                 "registration_tokens",
                 keyvalues={"token": token},
                 retcols=["pending", "completed"],
             )
         )
-        self.assertEqual(res["pending"], 0)
-        self.assertEqual(res["completed"], 1)
+        self.assertEqual(pending, 0)
+        self.assertEqual(completed, 1)
 
         # Check auth still fails when using token with session2
         channel = self.make_request(b"POST", self.url, params2)

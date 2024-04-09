@@ -1,17 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2014-2016 OpenMarket Ltd
-# Copyright 2018 New Vector Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 """ This module contains REST servlets to do with rooms: /rooms/<paths> """
 import logging
@@ -859,7 +865,7 @@ class RoomEventServlet(RestServlet):
 
             # per MSC2676, /rooms/{roomId}/event/{eventId}, should return the
             # *original* event, rather than the edited version
-            event_dict = self._event_serializer.serialize_event(
+            event_dict = await self._event_serializer.serialize_event(
                 event,
                 self.clock.time_msec(),
                 bundle_aggregations=aggregations,
@@ -911,25 +917,25 @@ class RoomEventContextServlet(RestServlet):
         time_now = self.clock.time_msec()
         serializer_options = SerializeEventConfig(requester=requester)
         results = {
-            "events_before": self._event_serializer.serialize_events(
+            "events_before": await self._event_serializer.serialize_events(
                 event_context.events_before,
                 time_now,
                 bundle_aggregations=event_context.aggregations,
                 config=serializer_options,
             ),
-            "event": self._event_serializer.serialize_event(
+            "event": await self._event_serializer.serialize_event(
                 event_context.event,
                 time_now,
                 bundle_aggregations=event_context.aggregations,
                 config=serializer_options,
             ),
-            "events_after": self._event_serializer.serialize_events(
+            "events_after": await self._event_serializer.serialize_events(
                 event_context.events_after,
                 time_now,
                 bundle_aggregations=event_context.aggregations,
                 config=serializer_options,
             ),
-            "state": self._event_serializer.serialize_events(
+            "state": await self._event_serializer.serialize_events(
                 event_context.state,
                 time_now,
                 config=serializer_options,

@@ -1,18 +1,24 @@
-# Copyright 2016 OpenMarket Ltd
-# Copyright 2018-2019 New Vector Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2019 The Matrix.org Foundation C.I.C.
+# Copyright 2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import logging
 from typing import TYPE_CHECKING, Dict, Iterable, List, Mapping, Optional, Tuple
 
@@ -542,6 +548,12 @@ class E2eKeysHandler:
         device_keys_query: Dict[str, Optional[List[str]]] = query_body.get(
             "device_keys", {}
         )
+        if any(
+            not self.is_mine(UserID.from_string(user_id))
+            for user_id in device_keys_query
+        ):
+            raise SynapseError(400, "User is not hosted on this homeserver")
+
         res = await self.query_local_devices(
             device_keys_query,
             include_displaynames=(
@@ -659,6 +671,20 @@ class E2eKeysHandler:
         timeout: Optional[int],
         always_include_fallback_keys: bool,
     ) -> JsonDict:
+        """
+        Args:
+            query: A chain of maps from (user_id, device_id, algorithm) to the requested
+                number of keys to claim.
+            user: The user who is claiming these keys.
+            timeout: How long to wait for any federation key claim requests before
+                giving up.
+            always_include_fallback_keys: always include a fallback key for local users'
+                devices, even if we managed to claim a one-time-key.
+
+        Returns: a heterogeneous dict with two keys:
+            one_time_keys: chain of maps user ID -> device ID -> key ID -> key.
+            failures: map from remote destination to a JsonDict describing the error.
+        """
         local_query: List[Tuple[str, str, str, int]] = []
         remote_queries: Dict[str, Dict[str, Dict[str, Dict[str, int]]]] = {}
 
@@ -739,6 +765,16 @@ class E2eKeysHandler:
     async def upload_keys_for_user(
         self, user_id: str, device_id: str, keys: JsonDict
     ) -> JsonDict:
+        """
+        Args:
+            user_id: user whose keys are being uploaded.
+            device_id: device whose keys are being uploaded.
+            keys: the body of a /keys/upload request.
+
+        Returns a dictionary with one field:
+            "one_time_keys": A mapping from algorithm to number of keys for that
+                algorithm, including those previously persisted.
+        """
         # This can only be called from the main process.
         assert isinstance(self.device_handler, DeviceHandler)
 
@@ -1420,19 +1456,25 @@ class E2eKeysHandler:
 
         return desired_key_data
 
-    async def is_cross_signing_set_up_for_user(self, user_id: str) -> bool:
+    async def check_cross_signing_setup(self, user_id: str) -> Tuple[bool, bool]:
         """Checks if the user has cross-signing set up
 
         Args:
             user_id: The user to check
 
-        Returns:
-            True if the user has cross-signing set up, False otherwise
+        Returns: a 2-tuple of booleans
+            - whether the user has cross-signing set up, and
+            - whether the user's master cross-signing key may be replaced without UIA.
         """
-        existing_master_key = await self.store.get_e2e_cross_signing_key(
-            user_id, "master"
-        )
-        return existing_master_key is not None
+        (
+            exists,
+            ts_replacable_without_uia_before,
+        ) = await self.store.get_master_cross_signing_key_updatable_before(user_id)
+
+        if ts_replacable_without_uia_before is None:
+            return exists, False
+        else:
+            return exists, self.clock.time_msec() < ts_replacable_without_uia_before
 
 
 def _check_cross_signing_key(

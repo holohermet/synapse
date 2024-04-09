@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2017 Vector Creations Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 """A replication client for use by synapse workers.
 """
 import logging
@@ -126,12 +133,11 @@ class ReplicationDataHandler:
                 StreamKeyType.ACCOUNT_DATA, token, users=[row.user_id for row in rows]
             )
         elif stream_name == ReceiptsStream.NAME:
+            new_token = self.store.get_max_receipt_stream_id()
             self.notifier.on_new_event(
-                StreamKeyType.RECEIPT, token, rooms=[row.room_id for row in rows]
+                StreamKeyType.RECEIPT, new_token, rooms=[row.room_id for row in rows]
             )
-            await self._pusher_pool.on_new_receipts(
-                token, token, {row.room_id for row in rows}
-            )
+            await self._pusher_pool.on_new_receipts({row.user_id for row in rows})
         elif stream_name == ToDeviceStream.NAME:
             entities = [row.entity for row in rows if row.entity.startswith("@")]
             if entities:
@@ -281,14 +287,6 @@ class ReplicationDataHandler:
         # may be streaming.
         self.notifier.notify_replication()
 
-    def on_remote_server_up(self, server: str) -> None:
-        """Called when get a new REMOTE_SERVER_UP command."""
-
-        # Let's wake up the transaction queue for the server in case we have
-        # pending stuff to send to it.
-        if self.send_handler:
-            self.send_handler.wake_destination(server)
-
     async def wait_for_stream_position(
         self,
         instance_name: str,
@@ -406,9 +404,6 @@ class FederationSenderHandler:
         self.federation_position: Optional[int] = None
 
         self._fed_position_linearizer = Linearizer(name="_fed_position_linearizer")
-
-    def wake_destination(self, server: str) -> None:
-        self.federation_sender.wake_destination(server)
 
     async def process_replication_rows(
         self, stream_name: str, token: int, rows: list

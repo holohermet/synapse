@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2018-2021 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import hashlib
 import ipaddress
 import json
@@ -40,12 +47,15 @@ from typing import (
     Union,
     cast,
 )
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import attr
+from incremental import Version
 from typing_extensions import ParamSpec
 from zope.interface import implementer
 
+import twisted
+from twisted.enterprise import adbapi
 from twisted.internet import address, tcp, threads, udp
 from twisted.internet._resolver import SimpleResolverComplexifier
 from twisted.internet.defer import Deferred, fail, maybeDeferred, succeed
@@ -85,8 +95,8 @@ from synapse.module_api.callbacks.third_party_event_rules_callbacks import (
 )
 from synapse.server import HomeServer
 from synapse.storage import DataStore
-from synapse.storage.database import LoggingDatabaseConnection
-from synapse.storage.engines import PostgresEngine, create_engine
+from synapse.storage.database import LoggingDatabaseConnection, make_pool
+from synapse.storage.engines import BaseDatabaseEngine, create_engine
 from synapse.storage.prepare_database import prepare_database
 from synapse.types import ISynapseReactor, JsonDict
 from synapse.util import Clock
@@ -474,6 +484,16 @@ class ThreadedMemoryReactorClock(MemoryReactorClock):
                     return fail(DNSLookupError("OH NO: unknown %s" % (name,)))
                 return succeed(lookups[name])
 
+        # In order for the TLS protocol tests to work, modify _get_default_clock
+        # on newer Twisted versions to use the test reactor's clock.
+        #
+        # This is *super* dirty since it is never undone and relies on the next
+        # test to overwrite it.
+        if twisted.version > Version("Twisted", 23, 8, 0):
+            from twisted.protocols import tls
+
+            tls._get_default_clock = lambda: self
+
         self.nameResolver = SimpleResolverComplexifier(FakeResolver())
         super().__init__()
 
@@ -651,6 +671,53 @@ def validate_connector(connector: tcp.Connector, expected_ip: str) -> None:
         )
 
 
+def make_fake_db_pool(
+    reactor: ISynapseReactor,
+    db_config: DatabaseConnectionConfig,
+    engine: BaseDatabaseEngine,
+) -> adbapi.ConnectionPool:
+    """Wrapper for `make_pool` which builds a pool which runs db queries synchronously.
+
+    For more deterministic testing, we don't use a regular db connection pool: instead
+    we run all db queries synchronously on the test reactor's main thread. This function
+    is a drop-in replacement for the normal `make_pool` which builds such a connection
+    pool.
+    """
+    pool = make_pool(reactor, db_config, engine)
+
+    def runWithConnection(
+        func: Callable[..., R], *args: Any, **kwargs: Any
+    ) -> Awaitable[R]:
+        return threads.deferToThreadPool(
+            pool._reactor,
+            pool.threadpool,
+            pool._runWithConnection,
+            func,
+            *args,
+            **kwargs,
+        )
+
+    def runInteraction(
+        desc: str, func: Callable[..., R], *args: Any, **kwargs: Any
+    ) -> Awaitable[R]:
+        return threads.deferToThreadPool(
+            pool._reactor,
+            pool.threadpool,
+            pool._runInteraction,
+            desc,
+            func,
+            *args,
+            **kwargs,
+        )
+
+    pool.runWithConnection = runWithConnection  # type: ignore[method-assign]
+    pool.runInteraction = runInteraction  # type: ignore[assignment]
+    # Replace the thread pool with a threadless 'thread' pool
+    pool.threadpool = ThreadPool(reactor)
+    pool.running = True
+    return pool
+
+
 class ThreadPool:
     """
     Threadless thread pool.
@@ -685,52 +752,6 @@ class ThreadPool:
         d.addBoth(_)
         self._reactor.callLater(0, d.callback, True)
         return d
-
-
-def _make_test_homeserver_synchronous(server: HomeServer) -> None:
-    """
-    Make the given test homeserver's database interactions synchronous.
-    """
-
-    clock = server.get_clock()
-
-    for database in server.get_datastores().databases:
-        pool = database._db_pool
-
-        def runWithConnection(
-            func: Callable[..., R], *args: Any, **kwargs: Any
-        ) -> Awaitable[R]:
-            return threads.deferToThreadPool(
-                pool._reactor,
-                pool.threadpool,
-                pool._runWithConnection,
-                func,
-                *args,
-                **kwargs,
-            )
-
-        def runInteraction(
-            desc: str, func: Callable[..., R], *args: Any, **kwargs: Any
-        ) -> Awaitable[R]:
-            return threads.deferToThreadPool(
-                pool._reactor,
-                pool.threadpool,
-                pool._runInteraction,
-                desc,
-                func,
-                *args,
-                **kwargs,
-            )
-
-        pool.runWithConnection = runWithConnection  # type: ignore[method-assign]
-        pool.runInteraction = runInteraction  # type: ignore[assignment]
-        # Replace the thread pool with a threadless 'thread' pool
-        pool.threadpool = ThreadPool(clock._reactor)
-        pool.running = True
-
-    # We've just changed the Databases to run DB transactions on the same
-    # thread, so we need to disable the dedicated thread behaviour.
-    server.get_datastores().main.USE_DEDICATED_DB_THREADS_FOR_EVENT_FETCHING = False
 
 
 def get_clock() -> Tuple[ThreadedMemoryReactorClock, Clock]:
@@ -962,7 +983,7 @@ def setup_test_homeserver(
         database_config = {
             "name": "psycopg2",
             "args": {
-                "database": test_db,
+                "dbname": test_db,
                 "host": POSTGRES_HOST,
                 "password": POSTGRES_PASSWORD,
                 "user": POSTGRES_USER,
@@ -1017,18 +1038,15 @@ def setup_test_homeserver(
 
     # Create the database before we actually try and connect to it, based off
     # the template database we generate in setupdb()
-    if isinstance(db_engine, PostgresEngine):
-        import psycopg2.extensions
-
+    if USE_POSTGRES_FOR_TESTS:
         db_conn = db_engine.module.connect(
-            database=POSTGRES_BASE_DB,
+            dbname=POSTGRES_BASE_DB,
             user=POSTGRES_USER,
             host=POSTGRES_HOST,
             port=POSTGRES_PORT,
             password=POSTGRES_PASSWORD,
         )
-        assert isinstance(db_conn, psycopg2.extensions.connection)
-        db_conn.autocommit = True
+        db_engine.attempt_to_set_autocommit(db_conn, True)
         cur = db_conn.cursor()
         cur.execute("DROP DATABASE IF EXISTS %s;" % (test_db,))
         cur.execute(
@@ -1051,15 +1069,21 @@ def setup_test_homeserver(
     # Mock TLS
     hs.tls_server_context_factory = Mock()
 
-    hs.setup()
+    # Patch `make_pool` before initialising the database, to make database transactions
+    # synchronous for testing.
+    with patch("synapse.storage.database.make_pool", side_effect=make_fake_db_pool):
+        hs.setup()
 
-    if isinstance(db_engine, PostgresEngine):
+    # Since we've changed the databases to run DB transactions on the same
+    # thread, we need to stop the event fetcher hogging that one thread.
+    hs.get_datastores().main.USE_DEDICATED_DB_THREADS_FOR_EVENT_FETCHING = False
+
+    if USE_POSTGRES_FOR_TESTS:
         database_pool = hs.get_datastores().databases[0]
 
         # We need to do cleanup on PostgreSQL
         def cleanup() -> None:
             import psycopg2
-            import psycopg2.extensions
 
             # Close all the db pools
             database_pool._db_pool.close()
@@ -1068,14 +1092,13 @@ def setup_test_homeserver(
 
             # Drop the test database
             db_conn = db_engine.module.connect(
-                database=POSTGRES_BASE_DB,
+                dbname=POSTGRES_BASE_DB,
                 user=POSTGRES_USER,
                 host=POSTGRES_HOST,
                 port=POSTGRES_PORT,
                 password=POSTGRES_PASSWORD,
             )
-            assert isinstance(db_conn, psycopg2.extensions.connection)
-            db_conn.autocommit = True
+            db_engine.attempt_to_set_autocommit(db_conn, True)
             cur = db_conn.cursor()
 
             # Try a few times to drop the DB. Some things may hold on to the
@@ -1122,9 +1145,6 @@ def setup_test_homeserver(
         return hashlib.md5(p.encode("utf8")).hexdigest() == h
 
     hs.get_auth_handler().validate_hash = validate_hash  # type: ignore[assignment]
-
-    # Make the threadpool and database transactions synchronous for testing.
-    _make_test_homeserver_synchronous(hs)
 
     # Load any configured modules into the homeserver
     module_api = hs.get_module_api()

@@ -26,9 +26,9 @@ for most users.
 #### Docker images and Ansible playbooks
 
 There is an official synapse image available at
-<https://hub.docker.com/r/matrixdotorg/synapse> or at [`ghcr.io/matrix-org/synapse`](https://ghcr.io/matrix-org/synapse)
+<https://hub.docker.com/r/matrixdotorg/synapse> or at [`ghcr.io/element-hq/synapse`](https://ghcr.io/element-hq/synapse)
 which can be used with the docker-compose file available at
-[contrib/docker](https://github.com/matrix-org/synapse/tree/develop/contrib/docker).
+[contrib/docker](https://github.com/element-hq/synapse/tree/develop/contrib/docker).
 Further information on this including configuration options is available in the README
 on hub.docker.com.
 
@@ -48,9 +48,11 @@ For more details, see
 ##### Matrix.org packages
 
 Matrix.org provides Debian/Ubuntu packages of Synapse, for the amd64
-architecture via <https://packages.matrix.org/debian/>.  
+architecture via <https://packages.matrix.org/debian/>.
 
 To install the latest release:
+
+TODO UPDATE ALL THIS
 
 ```sh
 sudo apt install -y lsb-release wget apt-transport-https
@@ -324,6 +326,17 @@ Some extra dependencies may be needed. You can use Homebrew (https://brew.sh) fo
 You may need to install icu, and make the icu binaries and libraries accessible.
 Please follow [the official instructions of PyICU](https://pypi.org/project/PyICU/) to do so.
 
+If you're struggling to get icu discovered, and see:
+```
+  RuntimeError:
+  Please install pkg-config on your system or set the ICU_VERSION environment
+  variable to the version of ICU you have installed.
+```
+despite it being installed and having your `PATH` updated, you can omit this dependency by
+not specifying `--extras all` to `poetry`. If using postgres, you can install Synapse via
+`poetry install --extras saml2 --extras oidc --extras postgres --extras opentracing --extras redis --extras sentry`.
+ICU is not a hard dependency on getting a working installation.
+
 On ARM-based Macs you may also need to install libjpeg and libpq:
 ```sh
  brew install jpeg libpq
@@ -446,9 +459,9 @@ listeners:
   ```
 
 - You will also need to add the options `tls_certificate_path` and
-  `tls_private_key_path`. to your configuration file. You will need to manage provisioning of 
+  `tls_private_key_path`. to your configuration file. You will need to manage provisioning of
    these certificates yourself.
-- You can find more information about these options as well as how to configure synapse in the 
+- You can find more information about these options as well as how to configure synapse in the
   [configuration manual](../usage/configuration/config_documentation.md).
 
   If you are using your own certificate, be sure to use a `.pem` file that

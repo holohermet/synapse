@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2020 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import abc
 import hashlib
 import io
@@ -143,7 +150,7 @@ class UserAttributes:
     display_name: Optional[str] = None
     picture: Optional[str] = None
     # mypy thinks these are incompatible for some reason.
-    emails: StrCollection = attr.Factory(list)  # type: ignore[assignment]
+    emails: StrCollection = attr.Factory(list)
 
 
 @attr.s(slots=True, auto_attribs=True)
@@ -806,7 +813,7 @@ class SsoHandler:
                 media_id = profile["avatar_url"].split("/")[-1]
                 if self._is_mine_server_name(server_name):
                     media = await self._media_repo.store.get_local_media(media_id)
-                    if media is not None and upload_name == media["upload_name"]:
+                    if media is not None and upload_name == media.upload_name:
                         logger.info("skipping saving the user avatar")
                         return True
 
@@ -1206,10 +1213,7 @@ class SsoHandler:
         # We have no guarantee that all the devices of that session are for the same
         # `user_id`. Hence, we have to iterate over the list of devices and log them out
         # one by one.
-        for device in devices:
-            user_id = device["user_id"]
-            device_id = device["device_id"]
-
+        for user_id, device_id in devices:
             # If the user_id associated with that device/session is not the one we got
             # out of the `sub` claim, skip that device and show log an error.
             if expected_user_id is not None and user_id != expected_user_id:

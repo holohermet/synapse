@@ -1,20 +1,29 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2014-2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import abc
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence, Set
+
+import attr
 
 from synapse.api.constants import Direction, Membership
 from synapse.events import EventBase
@@ -93,7 +102,7 @@ class AdminHandler:
         ]
         user_info_dict["displayname"] = profile.display_name
         user_info_dict["avatar_url"] = profile.avatar_url
-        user_info_dict["threepids"] = threepids
+        user_info_dict["threepids"] = [attr.asdict(t) for t in threepids]
         user_info_dict["external_ids"] = external_ids
         user_info_dict["erased"] = await self._store.is_user_erased(user.to_string())
 
@@ -171,8 +180,8 @@ class AdminHandler:
             else:
                 stream_ordering = room.stream_ordering
 
-            from_key = RoomStreamToken(0, 0)
-            to_key = RoomStreamToken(None, stream_ordering)
+            from_key = RoomStreamToken(topological=0, stream=0)
+            to_key = RoomStreamToken(stream=stream_ordering)
 
             # Events that we've processed in this room
             written_events: Set[str] = set()
@@ -200,7 +209,12 @@ class AdminHandler:
                 if not events:
                     break
 
-                from_key = events[-1].internal_metadata.after
+                last_event = events[-1]
+                assert last_event.internal_metadata.stream_ordering
+                from_key = RoomStreamToken(
+                    stream=last_event.internal_metadata.stream_ordering,
+                    topological=last_event.depth,
+                )
 
                 events = await filter_events_for_client(
                     self._storage_controllers, user_id, events
@@ -281,7 +295,7 @@ class AdminHandler:
                 start, limit, user_id
             )
             for media in media_ids:
-                writer.write_media_id(media["media_id"], media)
+                writer.write_media_id(media.media_id, attr.asdict(media))
 
             logger.info(
                 "[%s] Written %d media_ids of %s",

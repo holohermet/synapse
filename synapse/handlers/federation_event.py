@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2021 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import collections
 import itertools
@@ -88,7 +95,7 @@ from synapse.types import (
 )
 from synapse.types.state import StateFilter
 from synapse.util.async_helpers import Linearizer, concurrently_execute
-from synapse.util.iterutils import batch_iter, partition
+from synapse.util.iterutils import batch_iter, partition, sorted_topologically
 from synapse.util.retryutils import NotRetryingDestination
 from synapse.util.stringutils import shortstr
 
@@ -748,7 +755,7 @@ class FederationEventHandler:
         # fetching fresh state for the room if the missing event
         # can't be found, which slightly reduces our security.
         # it may also increase our DAG extremity count for the room,
-        # causing additional state resolution?  See #1760.
+        # causing additional state resolution?  See https://github.com/matrix-org/synapse/issues/1760.
         # However, fetching state doesn't hold the linearizer lock
         # apparently.
         #
@@ -1135,16 +1142,8 @@ class FederationEventHandler:
             partial_state_flags = await self._store.get_partial_state_events(seen)
             partial_state = any(partial_state_flags.values())
 
-            # Get the state of the events we know about
-            ours = await self._state_storage_controller.get_state_groups_ids(
-                room_id, seen, await_full_state=False
-            )
-
             # state_maps is a list of mappings from (type, state_key) to event_id
-            state_maps: List[StateMap[str]] = list(ours.values())
-
-            # we don't need this any more, let's delete it.
-            del ours
+            state_maps: List[StateMap[str]] = []
 
             # Ask the remote server for the states we don't
             # know about
@@ -1162,6 +1161,17 @@ class FederationEventHandler:
                     )
 
                     state_maps.append(remote_state_map)
+
+            # Get the state of the events we know about. We do this *after*
+            # trying to fetch missing state over federation as that might fail
+            # and then we can skip loading the local state.
+            ours = await self._state_storage_controller.get_state_groups_ids(
+                room_id, seen, await_full_state=False
+            )
+            state_maps.extend(ours.values())
+
+            # we don't need this any more, let's delete it.
+            del ours
 
             room_version = await self._store.get_room_version_id(room_id)
             state_map = await self._state_resolution_handler.resolve_events_with_store(
@@ -1357,9 +1367,9 @@ class FederationEventHandler:
             )
 
         if remote_event.is_state() and remote_event.rejected_reason is None:
-            state_map[
-                (remote_event.type, remote_event.state_key)
-            ] = remote_event.event_id
+            state_map[(remote_event.type, remote_event.state_key)] = (
+                remote_event.event_id
+            )
 
         return state_map
 
@@ -1669,64 +1679,39 @@ class FederationEventHandler:
 
         # XXX: it might be possible to kick this process off in parallel with fetching
         # the events.
-        while event_map:
-            # build a list of events whose auth events are not in the queue.
-            roots = tuple(
-                ev
-                for ev in event_map.values()
-                if not any(aid in event_map for aid in ev.auth_event_ids())
-            )
 
-            if not roots:
-                # if *none* of the remaining events are ready, that means
-                # we have a loop. This either means a bug in our logic, or that
-                # somebody has managed to create a loop (which requires finding a
-                # hash collision in room v2 and later).
-                logger.warning(
-                    "Loop found in auth events while fetching missing state/auth "
-                    "events: %s",
-                    shortstr(event_map.keys()),
-                )
-                return
+        # We need to persist an event's auth events before the event.
+        auth_graph = {
+            ev.event_id: [e_id for e_id in ev.auth_event_ids() if e_id in event_map]
+            for ev in event_map.values()
+        }
+        sorted_auth_event_ids = sorted_topologically(event_map.keys(), auth_graph)
+        sorted_auth_events = [event_map[e_id] for e_id in sorted_auth_event_ids]
+        logger.info(
+            "Persisting %i remaining outliers: %s",
+            len(sorted_auth_events),
+            shortstr(e.event_id for e in sorted_auth_events),
+        )
 
-            logger.info(
-                "Persisting %i of %i remaining outliers: %s",
-                len(roots),
-                len(event_map),
-                shortstr(e.event_id for e in roots),
-            )
-
-            await self._auth_and_persist_outliers_inner(room_id, roots)
-
-            for ev in roots:
-                del event_map[ev.event_id]
-
-    async def _auth_and_persist_outliers_inner(
-        self, room_id: str, fetched_events: Collection[EventBase]
-    ) -> None:
-        """Helper for _auth_and_persist_outliers
-
-        Persists a batch of events where we have (theoretically) already persisted all
-        of their auth events.
-
-        Marks the events as outliers, auths them, persists them to the database, and,
-        where appropriate (eg, an invite), awakes the notifier.
-
-        Params:
-            origin: where the events came from
-            room_id: the room that the events are meant to be in (though this has
-               not yet been checked)
-            fetched_events: the events to persist
-        """
         # get all the auth events for all the events in this batch. By now, they should
         # have been persisted.
-        auth_events = {
-            aid for event in fetched_events for aid in event.auth_event_ids()
+        auth_event_ids = {
+            aid for event in sorted_auth_events for aid in event.auth_event_ids()
         }
-        persisted_events = await self._store.get_events(
-            auth_events,
-            allow_rejected=True,
-        )
+        auth_map = {
+            ev.event_id: ev
+            for ev in sorted_auth_events
+            if ev.event_id in auth_event_ids
+        }
+
+        missing_events = auth_event_ids.difference(auth_map)
+        if missing_events:
+            persisted_events = await self._store.get_events(
+                missing_events,
+                allow_rejected=True,
+                redact_behaviour=EventRedactBehaviour.as_is,
+            )
+            auth_map.update(persisted_events)
 
         events_and_contexts_to_persist: List[Tuple[EventBase, EventContext]] = []
 
@@ -1734,7 +1719,7 @@ class FederationEventHandler:
             with nested_logging_context(suffix=event.event_id):
                 auth = []
                 for auth_event_id in event.auth_event_ids():
-                    ae = persisted_events.get(auth_event_id)
+                    ae = auth_map.get(auth_event_id)
                     if not ae:
                         # the fact we can't find the auth event doesn't mean it doesn't
                         # exist, which means it is premature to reject `event`. Instead we
@@ -1753,7 +1738,9 @@ class FederationEventHandler:
                 context = EventContext.for_outlier(self._storage_controllers)
                 try:
                     validate_event_for_room_version(event)
-                    await check_state_independent_auth_rules(self._store, event)
+                    await check_state_independent_auth_rules(
+                        self._store, event, batched_auth_events=auth_map
+                    )
                     check_state_dependent_auth_rules(event, auth)
                 except AuthError as e:
                     logger.warning("Rejecting %r because %s", event, e)
@@ -1770,17 +1757,25 @@ class FederationEventHandler:
 
             events_and_contexts_to_persist.append((event, context))
 
-        for event in fetched_events:
+        for i, event in enumerate(sorted_auth_events):
             await prep(event)
 
-        await self.persist_events_and_notify(
-            room_id,
-            events_and_contexts_to_persist,
-            # Mark these events backfilled as they're historic events that will
-            # eventually be backfilled. For example, missing events we fetch
-            # during backfill should be marked as backfilled as well.
-            backfilled=True,
-        )
+            # The above function is typically not async, and so won't yield to
+            # the reactor. For large rooms let's yield to the reactor
+            # occasionally to ensure we don't block other work.
+            if (i + 1) % 1000 == 0:
+                await self._clock.sleep(0)
+
+        # Also persist the new event in batches for similar reasons as above.
+        for batch in batch_iter(events_and_contexts_to_persist, 1000):
+            await self.persist_events_and_notify(
+                room_id,
+                batch,
+                # Mark these events as backfilled as they're historic events that will
+                # eventually be backfilled. For example, missing events we fetch
+                # during backfill should be marked as backfilled as well.
+                backfilled=True,
+            )
 
     @trace
     async def _check_event_auth(

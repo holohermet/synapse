@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2015-2021 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 from typing import Dict, Iterable, List, Optional
 from unittest.mock import AsyncMock, Mock
@@ -31,7 +38,12 @@ from synapse.appservice import (
 from synapse.handlers.appservice import ApplicationServicesHandler
 from synapse.rest.client import login, receipts, register, room, sendtodevice
 from synapse.server import HomeServer
-from synapse.types import JsonDict, RoomStreamToken
+from synapse.types import (
+    JsonDict,
+    MultiWriterStreamToken,
+    RoomStreamToken,
+    StreamKeyType,
+)
 from synapse.util import Clock
 from synapse.util.stringutils import random_string
 
@@ -86,7 +98,7 @@ class AppServiceHandlerTestCase(unittest.TestCase):
                 [event],
             ]
         )
-        self.handler.notify_interested_services(RoomStreamToken(None, 1))
+        self.handler.notify_interested_services(RoomStreamToken(stream=1))
 
         self.mock_scheduler.enqueue_for_appservice.assert_called_once_with(
             interested_service, events=[event]
@@ -107,7 +119,7 @@ class AppServiceHandlerTestCase(unittest.TestCase):
             ]
         )
         self.mock_store.get_events_as_list = AsyncMock(side_effect=[[event]])
-        self.handler.notify_interested_services(RoomStreamToken(None, 0))
+        self.handler.notify_interested_services(RoomStreamToken(stream=0))
 
         self.mock_as_api.query_user.assert_called_once_with(services[0], user_id)
 
@@ -126,7 +138,7 @@ class AppServiceHandlerTestCase(unittest.TestCase):
             ]
         )
 
-        self.handler.notify_interested_services(RoomStreamToken(None, 0))
+        self.handler.notify_interested_services(RoomStreamToken(stream=0))
 
         self.assertFalse(
             self.mock_as_api.query_user.called,
@@ -156,6 +168,7 @@ class AppServiceHandlerTestCase(unittest.TestCase):
         result = self.successResultOf(
             defer.ensureDeferred(self.handler.query_room_alias_exists(room_alias))
         )
+        assert result is not None
 
         self.mock_as_api.query_alias.assert_called_once_with(
             interested_service, room_alias_str
@@ -304,7 +317,9 @@ class AppServiceHandlerTestCase(unittest.TestCase):
         )
 
         self.handler.notify_interested_services_ephemeral(
-            "receipt_key", 580, ["@fakerecipient:example.com"]
+            StreamKeyType.RECEIPT,
+            MultiWriterStreamToken(stream=580),
+            ["@fakerecipient:example.com"],
         )
         self.mock_scheduler.enqueue_for_appservice.assert_called_once_with(
             interested_service, ephemeral=[event]
@@ -332,7 +347,9 @@ class AppServiceHandlerTestCase(unittest.TestCase):
         )
 
         self.handler.notify_interested_services_ephemeral(
-            "receipt_key", 580, ["@fakerecipient:example.com"]
+            StreamKeyType.RECEIPT,
+            MultiWriterStreamToken(stream=580),
+            ["@fakerecipient:example.com"],
         )
         # This method will be called, but with an empty list of events
         self.mock_scheduler.enqueue_for_appservice.assert_called_once_with(
@@ -441,7 +458,7 @@ class ApplicationServicesHandlerSendEventsTestCase(unittest.HomeserverTestCase):
         self.get_success(
             self.hs.get_application_service_handler()._notify_interested_services(
                 RoomStreamToken(
-                    None, self.hs.get_application_service_handler().current_max
+                    stream=self.hs.get_application_service_handler().current_max
                 )
             )
         )
@@ -634,8 +651,8 @@ class ApplicationServicesHandlerSendEventsTestCase(unittest.HomeserverTestCase):
             self.get_success(
                 self.hs.get_application_service_handler()._notify_interested_services_ephemeral(
                     services=[interested_appservice],
-                    stream_key="receipt_key",
-                    new_token=stream_token,
+                    stream_key=StreamKeyType.RECEIPT,
+                    new_token=MultiWriterStreamToken(stream=stream_token),
                     users=[self.exclusive_as_user],
                 )
             )

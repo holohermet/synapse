@@ -1,17 +1,24 @@
-# Copyright 2015-2022 The Matrix.org Foundation C.I.C.
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2020 Sorunome
+# Copyright 2015-2022 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 
 import copy
@@ -21,6 +28,7 @@ from typing import (
     TYPE_CHECKING,
     AbstractSet,
     Awaitable,
+    BinaryIO,
     Callable,
     Collection,
     Container,
@@ -1149,7 +1157,7 @@ class FederationClient(FederationBase):
             # NB: We *need* to copy to ensure that we don't have multiple
             # references being passed on, as that causes... issues.
             for s in signed_state:
-                s.internal_metadata = copy.deepcopy(s.internal_metadata)
+                s.internal_metadata = s.internal_metadata.copy()
 
             # double-check that the auth chain doesn't include a different create event
             auth_chain_create_events = [
@@ -1402,7 +1410,7 @@ class FederationClient(FederationBase):
             The remote homeserver return some state from the room. The response
             dictionary is in the form:
 
-            {"knock_state_events": [<state event dict>, ...]}
+            {"knock_room_state": [<state event dict>, ...]}
 
             The list of state events may be empty.
 
@@ -1429,7 +1437,7 @@ class FederationClient(FederationBase):
             The remote homeserver can optionally return some state from the room. The response
             dictionary is in the form:
 
-            {"knock_state_events": [<state event dict>, ...]}
+            {"knock_room_state": [<state event dict>, ...]}
 
             The list of state events may be empty.
         """
@@ -1861,6 +1869,43 @@ class FederationClient(FederationBase):
         filtered_failures = list(filter(filter_user_id, failures))
 
         return filtered_statuses, filtered_failures
+
+    async def download_media(
+        self,
+        destination: str,
+        media_id: str,
+        output_stream: BinaryIO,
+        max_size: int,
+        max_timeout_ms: int,
+    ) -> Tuple[int, Dict[bytes, List[bytes]]]:
+        try:
+            return await self.transport_layer.download_media_v3(
+                destination,
+                media_id,
+                output_stream=output_stream,
+                max_size=max_size,
+                max_timeout_ms=max_timeout_ms,
+            )
+        except HttpResponseException as e:
+            # If an error is received that is due to an unrecognised endpoint,
+            # fallback to the r0 endpoint. Otherwise, consider it a legitimate error
+            # and raise.
+            if not is_unknown_endpoint(e):
+                raise
+
+        logger.debug(
+            "Couldn't download media %s/%s with the v3 API, falling back to the r0 API",
+            destination,
+            media_id,
+        )
+
+        return await self.transport_layer.download_media_r0(
+            destination,
+            media_id,
+            output_stream=output_stream,
+            max_size=max_size,
+            max_timeout_ms=max_timeout_ms,
+        )
 
 
 @attr.s(frozen=True, slots=True, auto_attribs=True)

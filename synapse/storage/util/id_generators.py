@@ -1,17 +1,24 @@
-# Copyright 2014-2016 OpenMarket Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2021 The Matrix.org Foundation C.I.C.
+# Copyright 2014-2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import abc
 import heapq
 import logging
@@ -132,6 +139,15 @@ class AbstractStreamIdGenerator(metaclass=abc.ABCMeta):
         For streams with single writers this is equivalent to `get_current_token`.
         """
         raise NotImplementedError()
+
+    @abc.abstractmethod
+    def get_minimal_local_current_token(self) -> int:
+        """Tries to return a minimal current token for the local instance,
+        i.e. for writers this would be the last successful write.
+
+        If local instance is not a writer (or has written yet) then falls back
+        to returning the normal "current token".
+        """
 
     @abc.abstractmethod
     def get_next(self) -> AsyncContextManager[int]:
@@ -312,6 +328,9 @@ class StreamIdGenerator(AbstractStreamIdGenerator):
     def get_current_token_for_writer(self, instance_name: str) -> int:
         return self.get_current_token()
 
+    def get_minimal_local_current_token(self) -> int:
+        return self.get_current_token()
+
 
 class MultiWriterIdGenerator(AbstractStreamIdGenerator):
     """Generates and tracks stream IDs for a stream with multiple writers.
@@ -408,6 +427,11 @@ class MultiWriterIdGenerator(AbstractStreamIdGenerator):
         # The maximum stream ID that we have seen been allocated across any writer.
         self._max_seen_allocated_stream_id = 1
 
+        # The maximum position of the local instance. This can be higher than
+        # the corresponding position in `current_positions` table when there are
+        # no active writes in progress.
+        self._max_position_of_local_instance = self._max_seen_allocated_stream_id
+
         self._sequence_gen = PostgresSequenceGenerator(sequence_name)
 
         # We check that the table and sequence haven't diverged.
@@ -426,6 +450,16 @@ class MultiWriterIdGenerator(AbstractStreamIdGenerator):
         self._max_seen_allocated_stream_id = max(
             self._current_positions.values(), default=1
         )
+
+        # For the case where `stream_positions` is not up to date,
+        # `_persisted_upto_position` may be higher.
+        self._max_seen_allocated_stream_id = max(
+            self._max_seen_allocated_stream_id, self._persisted_upto_position
+        )
+
+        # Bump our local maximum position now that we've loaded things from the
+        # DB.
+        self._max_position_of_local_instance = self._max_seen_allocated_stream_id
 
         if not writers:
             # If there have been no explicit writers given then any instance can
@@ -545,6 +579,14 @@ class MultiWriterIdGenerator(AbstractStreamIdGenerator):
                     if instance == self._instance_name:
                         self._current_positions[instance] = stream_id
 
+        if self._writers:
+            # If we have explicit writers then make sure that each instance has
+            # a position.
+            for writer in self._writers:
+                self._current_positions.setdefault(
+                    writer, self._persisted_upto_position
+                )
+
         cur.close()
 
     def _load_next_id_txn(self, txn: Cursor) -> int:
@@ -615,8 +657,8 @@ class MultiWriterIdGenerator(AbstractStreamIdGenerator):
 
         next_id = self._load_next_id_txn(txn)
 
-        txn.call_after(self._mark_id_as_finished, next_id)
-        txn.call_on_exception(self._mark_id_as_finished, next_id)
+        txn.call_after(self._mark_ids_as_finished, [next_id])
+        txn.call_on_exception(self._mark_ids_as_finished, [next_id])
         txn.call_after(self._notifier.notify_replication)
 
         # Update the `stream_positions` table with newly updated stream
@@ -636,14 +678,50 @@ class MultiWriterIdGenerator(AbstractStreamIdGenerator):
 
         return self._return_factor * next_id
 
-    def _mark_id_as_finished(self, next_id: int) -> None:
-        """The ID has finished being processed so we should advance the
+    def get_next_mult_txn(self, txn: LoggingTransaction, n: int) -> List[int]:
+        """
+        Usage:
+
+            stream_id = stream_id_gen.get_next_txn(txn)
+            # ... persist event ...
+        """
+
+        # If we have a list of instances that are allowed to write to this
+        # stream, make sure we're in it.
+        if self._writers and self._instance_name not in self._writers:
+            raise Exception("Tried to allocate stream ID on non-writer")
+
+        next_ids = self._load_next_mult_id_txn(txn, n)
+
+        txn.call_after(self._mark_ids_as_finished, next_ids)
+        txn.call_on_exception(self._mark_ids_as_finished, next_ids)
+        txn.call_after(self._notifier.notify_replication)
+
+        # Update the `stream_positions` table with newly updated stream
+        # ID (unless self._writers is not set in which case we don't
+        # bother, as nothing will read it).
+        #
+        # We only do this on the success path so that the persisted current
+        # position points to a persisted row with the correct instance name.
+        if self._writers:
+            txn.call_after(
+                run_as_background_process,
+                "MultiWriterIdGenerator._update_table",
+                self._db.runInteraction,
+                "MultiWriterIdGenerator._update_table",
+                self._update_stream_positions_table_txn,
+            )
+
+        return [self._return_factor * next_id for next_id in next_ids]
+
+    def _mark_ids_as_finished(self, next_ids: List[int]) -> None:
+        """These IDs have finished being processed so we should advance the
         current position if possible.
         """
 
         with self._lock:
-            self._unfinished_ids.discard(next_id)
-            self._finished_ids.add(next_id)
+            self._unfinished_ids.difference_update(next_ids)
+            self._finished_ids.update(next_ids)
 
             new_cur: Optional[int] = None
 
@@ -688,8 +766,14 @@ class MultiWriterIdGenerator(AbstractStreamIdGenerator):
             if new_cur:
                 curr = self._current_positions.get(self._instance_name, 0)
                 self._current_positions[self._instance_name] = max(curr, new_cur)
+                self._max_position_of_local_instance = max(
+                    curr, new_cur, self._max_position_of_local_instance
+                )
 
-            self._add_persisted_position(next_id)
+            # TODO Can we call this for just the last position or somehow batch
+            # _add_persisted_position.
+            for next_id in next_ids:
+                self._add_persisted_position(next_id)
 
     def get_current_token(self) -> int:
         return self.get_persisted_upto_position()
@@ -702,8 +786,24 @@ class MultiWriterIdGenerator(AbstractStreamIdGenerator):
         # persisted up to position. This stops Synapse from doing a full table
         # scan when a new writer announces itself over replication.
         with self._lock:
-            return self._return_factor * self._current_positions.get(
+            if self._instance_name == instance_name:
+                return self._return_factor * self._max_position_of_local_instance
+
+            pos = self._current_positions.get(
                 instance_name, self._persisted_upto_position
+            )
+
+            # We want to return the maximum "current token" that we can for a
+            # writer, this helps ensure that streams progress as fast as
+            # possible.
+            pos = max(pos, self._persisted_upto_position)
+
+            return self._return_factor * pos
+
+    def get_minimal_local_current_token(self) -> int:
+        with self._lock:
+            return self._return_factor * self._current_positions.get(
+                self._instance_name, self._persisted_upto_position
             )
 
     def get_positions(self) -> Dict[str, int]:
@@ -773,6 +873,18 @@ class MultiWriterIdGenerator(AbstractStreamIdGenerator):
             min_curr = min(min_curr, our_current_position)
 
         self._persisted_upto_position = max(min_curr, self._persisted_upto_position)
+
+        # Advance our local max position.
+        self._max_position_of_local_instance = max(
+            self._max_position_of_local_instance, self._persisted_upto_position
+        )
+
+        if not self._unfinished_ids and not self._in_flight_fetches:
+            # If we don't have anything in flight, it's safe to advance to the
+            # max seen stream ID.
+            self._max_position_of_local_instance = max(
+                self._max_seen_allocated_stream_id, self._max_position_of_local_instance
+            )
 
         # We now iterate through the seen positions, discarding those that are
         # less than the current min positions, and incrementing the min position
@@ -867,8 +979,7 @@ class _MultiWriterCtxManager:
         exc: Optional[BaseException],
         tb: Optional[TracebackType],
     ) -> bool:
-        for i in self.stream_ids:
-            self.id_gen._mark_id_as_finished(i)
+        self.id_gen._mark_ids_as_finished(self.stream_ids)
 
         self.notifier.notify_replication()
 

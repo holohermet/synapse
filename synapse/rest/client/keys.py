@@ -1,18 +1,24 @@
-# Copyright 2015, 2016 OpenMarket Ltd
-# Copyright 2019 New Vector Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2020 The Matrix.org Foundation C.I.C.
+# Copyright 2015, 2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import logging
 import re
@@ -376,9 +382,10 @@ class SigningKeyUploadServlet(RestServlet):
         user_id = requester.user.to_string()
         body = parse_json_object_from_request(request)
 
-        is_cross_signing_setup = (
-            await self.e2e_keys_handler.is_cross_signing_set_up_for_user(user_id)
-        )
+        (
+            is_cross_signing_setup,
+            master_key_updatable_without_uia,
+        ) = await self.e2e_keys_handler.check_cross_signing_setup(user_id)
 
         # Before MSC3967 we required UIA both when setting up cross signing for the
         # first time and when resetting the device signing key. With MSC3967 we only
@@ -386,9 +393,14 @@ class SigningKeyUploadServlet(RestServlet):
         # time. Because there is no UIA in MSC3861, for now we throw an error if the
         # user tries to reset the device signing key when MSC3861 is enabled, but allow
         # first-time setup.
+        #
+        # XXX: We now have a get-out clause by which MAS can temporarily mark the master
+        # key as replaceable. It should do its own equivalent of user interactive auth
+        # before doing so.
         if self.hs.config.experimental.msc3861.enabled:
-            # There is no way to reset the device signing key with MSC3861
-            if is_cross_signing_setup:
+            # The auth service has to explicitly mark the master key as replaceable
+            # without UIA to reset the device signing key with MSC3861.
+            if is_cross_signing_setup and not master_key_updatable_without_uia:
                 raise SynapseError(
                     HTTPStatus.NOT_IMPLEMENTED,
                     "Resetting cross signing keys is not yet supported with MSC3861",

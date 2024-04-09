@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2019 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import logging
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, List, Optional, Tuple
 
@@ -295,7 +302,8 @@ class ThirdPartyEventRulesModuleApiCallbacks:
                 raise
             except SynapseError as e:
                 # FIXME: Being able to throw SynapseErrors is relied upon by
-                # some modules. PR #10386 accidentally broke this ability.
+                # some modules. PR https://github.com/matrix-org/synapse/pull/10386
+                # accidentally broke this ability.
                 # That said, we aren't keen on exposing this implementation detail
                 # to modules and we should one day have a proper way to do what
                 # is wanted.
@@ -358,7 +366,7 @@ class ThirdPartyEventRulesModuleApiCallbacks:
         if len(self._check_threepid_can_be_invited_callbacks) == 0:
             return True
 
-        state_events = await self._get_state_map_for_room(room_id)
+        state_events = await self._storage_controllers.state.get_current_state(room_id)
 
         for callback in self._check_threepid_can_be_invited_callbacks:
             try:
@@ -391,7 +399,7 @@ class ThirdPartyEventRulesModuleApiCallbacks:
         if len(self._check_visibility_can_be_modified_callbacks) == 0:
             return True
 
-        state_events = await self._get_state_map_for_room(room_id)
+        state_events = await self._storage_controllers.state.get_current_state(room_id)
 
         for callback in self._check_visibility_can_be_modified_callbacks:
             try:
@@ -419,7 +427,13 @@ class ThirdPartyEventRulesModuleApiCallbacks:
             return
 
         event = await self.store.get_event(event_id)
-        state_events = await self._get_state_map_for_room(event.room_id)
+
+        # We *don't* want to wait for the full state here, because waiting for full
+        # state will persist event, which in turn will call this method.
+        # This would end up in a deadlock.
+        state_events = await self._storage_controllers.state.get_current_state(
+            event.room_id, await_full_state=False
+        )
 
         for callback in self._on_new_event_callbacks:
             try:
@@ -481,17 +495,6 @@ class ThirdPartyEventRulesModuleApiCallbacks:
                     "Failed to run module API callback %s: %s", callback, e
                 )
         return True
-
-    async def _get_state_map_for_room(self, room_id: str) -> StateMap[EventBase]:
-        """Given a room ID, return the state events of that room.
-
-        Args:
-            room_id: The ID of the room.
-
-        Returns:
-            A dict mapping (event type, state key) to state event.
-        """
-        return await self._storage_controllers.state.get_current_state(room_id)
 
     async def on_profile_update(
         self, user_id: str, new_profile: ProfileInfo, by_admin: bool, deactivation: bool

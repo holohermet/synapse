@@ -1,18 +1,25 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2020 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the 'License');
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an 'AS IS' BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Set, Tuple, cast
 
 from twisted.test.proto_helpers import MemoryReactor
 from twisted.trial import unittest
@@ -421,41 +428,53 @@ class EventChainStoreTestCase(HomeserverTestCase):
         self, events: List[EventBase]
     ) -> Tuple[Dict[str, Tuple[int, int]], _LinkMap]:
         # Fetch the map from event ID -> (chain ID, sequence number)
-        rows = self.get_success(
-            self.store.db_pool.simple_select_many_batch(
-                table="event_auth_chains",
-                column="event_id",
-                iterable=[e.event_id for e in events],
-                retcols=("event_id", "chain_id", "sequence_number"),
-                keyvalues={},
-            )
+        rows = cast(
+            List[Tuple[str, int, int]],
+            self.get_success(
+                self.store.db_pool.simple_select_many_batch(
+                    table="event_auth_chains",
+                    column="event_id",
+                    iterable=[e.event_id for e in events],
+                    retcols=("event_id", "chain_id", "sequence_number"),
+                    keyvalues={},
+                )
+            ),
         )
 
         chain_map = {
-            row["event_id"]: (row["chain_id"], row["sequence_number"]) for row in rows
+            event_id: (chain_id, sequence_number)
+            for event_id, chain_id, sequence_number in rows
         }
 
         # Fetch all the links and pass them to the _LinkMap.
-        rows = self.get_success(
-            self.store.db_pool.simple_select_many_batch(
-                table="event_auth_chain_links",
-                column="origin_chain_id",
-                iterable=[chain_id for chain_id, _ in chain_map.values()],
-                retcols=(
-                    "origin_chain_id",
-                    "origin_sequence_number",
-                    "target_chain_id",
-                    "target_sequence_number",
-                ),
-                keyvalues={},
-            )
+        auth_chain_rows = cast(
+            List[Tuple[int, int, int, int]],
+            self.get_success(
+                self.store.db_pool.simple_select_many_batch(
+                    table="event_auth_chain_links",
+                    column="origin_chain_id",
+                    iterable=[chain_id for chain_id, _ in chain_map.values()],
+                    retcols=(
+                        "origin_chain_id",
+                        "origin_sequence_number",
+                        "target_chain_id",
+                        "target_sequence_number",
+                    ),
+                    keyvalues={},
+                )
+            ),
         )
 
         link_map = _LinkMap()
-        for row in rows:
+        for (
+            origin_chain_id,
+            origin_sequence_number,
+            target_chain_id,
+            target_sequence_number,
+        ) in auth_chain_rows:
             added = link_map.add_link(
-                (row["origin_chain_id"], row["origin_sequence_number"]),
-                (row["target_chain_id"], row["target_sequence_number"]),
+                (origin_chain_id, origin_sequence_number),
+                (target_chain_id, target_sequence_number),
             )
 
             # We shouldn't have persisted any redundant links

@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2014 - 2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import logging
 from typing import (
@@ -21,11 +28,13 @@ from typing import (
     Dict,
     Iterable,
     List,
+    Literal,
     Optional,
     Set,
     Tuple,
     TypeVar,
     Union,
+    overload,
 )
 
 import attr
@@ -44,6 +53,7 @@ from synapse.metrics import LaterGauge
 from synapse.streams.config import PaginationConfig
 from synapse.types import (
     JsonDict,
+    MultiWriterStreamToken,
     PersistedEventPosition,
     RoomStreamToken,
     StrCollection,
@@ -126,8 +136,8 @@ class _NotifierUserStream:
 
     def notify(
         self,
-        stream_key: str,
-        stream_id: Union[int, RoomStreamToken],
+        stream_key: StreamKeyType,
+        stream_id: Union[int, RoomStreamToken, MultiWriterStreamToken],
         time_now_ms: int,
     ) -> None:
         """Notify any listeners for this user of a new event from an
@@ -452,10 +462,45 @@ class Notifier:
         except Exception:
             logger.exception("Error pusher pool of event")
 
+    @overload
     def on_new_event(
         self,
-        stream_key: str,
-        new_token: Union[int, RoomStreamToken],
+        stream_key: Literal[StreamKeyType.ROOM],
+        new_token: RoomStreamToken,
+        users: Optional[Collection[Union[str, UserID]]] = None,
+        rooms: Optional[StrCollection] = None,
+    ) -> None: ...
+
+    @overload
+    def on_new_event(
+        self,
+        stream_key: Literal[StreamKeyType.RECEIPT],
+        new_token: MultiWriterStreamToken,
+        users: Optional[Collection[Union[str, UserID]]] = None,
+        rooms: Optional[StrCollection] = None,
+    ) -> None: ...
+
+    @overload
+    def on_new_event(
+        self,
+        stream_key: Literal[
+            StreamKeyType.ACCOUNT_DATA,
+            StreamKeyType.DEVICE_LIST,
+            StreamKeyType.PRESENCE,
+            StreamKeyType.PUSH_RULES,
+            StreamKeyType.TO_DEVICE,
+            StreamKeyType.TYPING,
+            StreamKeyType.UN_PARTIAL_STATED_ROOMS,
+        ],
+        new_token: int,
+        users: Optional[Collection[Union[str, UserID]]] = None,
+        rooms: Optional[StrCollection] = None,
+    ) -> None: ...
+
+    def on_new_event(
+        self,
+        stream_key: StreamKeyType,
+        new_token: Union[int, RoomStreamToken, MultiWriterStreamToken],
         users: Optional[Collection[Union[str, UserID]]] = None,
         rooms: Optional[StrCollection] = None,
     ) -> None:
@@ -655,30 +700,29 @@ class Notifier:
             events: List[Union[JsonDict, EventBase]] = []
             end_token = from_token
 
-            for name, source in self.event_sources.sources.get_sources():
-                keyname = "%s_key" % name
-                before_id = getattr(before_token, keyname)
-                after_id = getattr(after_token, keyname)
+            for keyname, source in self.event_sources.sources.get_sources():
+                before_id = before_token.get_field(keyname)
+                after_id = after_token.get_field(keyname)
                 if before_id == after_id:
                     continue
 
                 new_events, new_key = await source.get_new_events(
                     user=user,
-                    from_key=getattr(from_token, keyname),
+                    from_key=from_token.get_field(keyname),
                     limit=limit,
                     is_guest=is_peeking,
                     room_ids=room_ids,
                     explicit_room_id=explicit_room_id,
                 )
 
-                if name == "room":
+                if keyname == StreamKeyType.ROOM:
                     new_events = await filter_events_for_client(
                         self._storage_controllers,
                         user.to_string(),
                         new_events,
                         is_peeking=is_peeking,
                     )
-                elif name == "presence":
+                elif keyname == StreamKeyType.PRESENCE:
                     now = self.clock.time_msec()
                     new_events[:] = [
                         {

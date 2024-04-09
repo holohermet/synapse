@@ -1,20 +1,28 @@
-# Copyright 2017, 2018 New Vector Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2019 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
+import itertools
 import logging
 from typing import TYPE_CHECKING, Optional
 
+from synapse.api.constants import Membership
 from synapse.api.errors import SynapseError
 from synapse.handlers.device import DeviceHandler
 from synapse.metrics.background_process_metrics import run_as_background_process
@@ -103,10 +111,10 @@ class DeactivateAccountHandler:
         # Attempt to unbind any known bound threepids to this account from identity
         # server(s).
         bound_threepids = await self.store.user_get_bound_threepids(user_id)
-        for threepid in bound_threepids:
+        for medium, address in bound_threepids:
             try:
                 result = await self._identity_handler.try_unbind_threepid(
-                    user_id, threepid["medium"], threepid["address"], id_server
+                    user_id, medium, address, id_server
                 )
             except Exception:
                 # Do we want this to be a fatal error or should we carry on?
@@ -117,9 +125,9 @@ class DeactivateAccountHandler:
 
         # Remove any local threepid associations for this account.
         local_threepids = await self.store.user_get_threepids(user_id)
-        for threepid in local_threepids:
+        for local_threepid in local_threepids:
             await self._auth_handler.delete_local_threepid(
-                user_id, threepid["medium"], threepid["address"]
+                user_id, local_threepid.medium, local_threepid.address
             )
 
         # delete any devices belonging to the user, which will also
@@ -162,9 +170,9 @@ class DeactivateAccountHandler:
         # parts users from rooms (if it isn't already running)
         self._start_user_parting()
 
-        # Reject all pending invites for the user, so that the user doesn't show up in the
-        # "invited" section of rooms' members list.
-        await self._reject_pending_invites_for_user(user_id)
+        # Reject all pending invites and knocks for the user, so that the
+        # user doesn't show up in the "invited" section of rooms' members list.
+        await self._reject_pending_invites_and_knocks_for_user(user_id)
 
         # Remove all information on the user from the account_validity table.
         if self._account_validity_enabled:
@@ -188,34 +196,37 @@ class DeactivateAccountHandler:
 
         return identity_server_supports_unbinding
 
-    async def _reject_pending_invites_for_user(self, user_id: str) -> None:
-        """Reject pending invites addressed to a given user ID.
+    async def _reject_pending_invites_and_knocks_for_user(self, user_id: str) -> None:
+        """Reject pending invites and knocks addressed to a given user ID.
 
         Args:
-            user_id: The user ID to reject pending invites for.
+            user_id: The user ID to reject pending invites and knocks for.
         """
         user = UserID.from_string(user_id)
         pending_invites = await self.store.get_invited_rooms_for_local_user(user_id)
+        pending_knocks = await self.store.get_knocked_at_rooms_for_local_user(user_id)
 
-        for room in pending_invites:
+        for room in itertools.chain(pending_invites, pending_knocks):
             try:
                 await self._room_member_handler.update_membership(
                     create_requester(user, authenticated_entity=self._server_name),
                     user,
                     room.room_id,
-                    "leave",
+                    Membership.LEAVE,
                     ratelimit=False,
                     require_consent=False,
                 )
                 logger.info(
-                    "Rejected invite for deactivated user %r in room %r",
+                    "Rejected %r for deactivated user %r in room %r",
+                    room.membership,
                     user_id,
                     room.room_id,
                 )
             except Exception:
                 logger.exception(
-                    "Failed to reject invite for user %r in room %r:"
+                    "Failed to reject %r for user %r in room %r:"
                     " ignoring and continuing",
+                    room.membership,
                     user_id,
                     room.room_id,
                 )

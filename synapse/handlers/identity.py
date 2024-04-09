@@ -1,23 +1,31 @@
-# Copyright 2015, 2016 OpenMarket Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2017 Vector Creations Ltd
-# Copyright 2018 New Vector Ltd
+# Copyright 2015, 2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 """Utilities for interacting with Identity Servers"""
 import logging
 import urllib.parse
 from typing import TYPE_CHECKING, Awaitable, Callable, Dict, List, Optional, Tuple
+
+import attr
 
 from synapse.api.errors import (
     CodeMessageException,
@@ -357,9 +365,9 @@ class IdentityHandler:
 
         # Check to see if a session already exists and that it is not yet
         # marked as validated
-        if session and session.get("validated_at") is None:
-            session_id = session["session_id"]
-            last_send_attempt = session["last_send_attempt"]
+        if session and session.validated_at is None:
+            session_id = session.session_id
+            last_send_attempt = session.last_send_attempt
 
             # Check that the send_attempt is higher than previous attempts
             if send_attempt <= last_send_attempt:
@@ -480,7 +488,6 @@ class IdentityHandler:
 
         # We don't actually know which medium this 3PID is. Thus we first assume it's email,
         # and if validation fails we try msisdn
-        validation_session = None
 
         # Try to validate as email
         if self.hs.config.email.can_verify_email:
@@ -488,19 +495,18 @@ class IdentityHandler:
             validation_session = await self.store.get_threepid_validation_session(
                 "email", client_secret, sid=sid, validated=True
             )
-
-        if validation_session:
-            return validation_session
+            if validation_session:
+                return attr.asdict(validation_session)
 
         # Try to validate as msisdn
         if self.hs.config.registration.account_threepid_delegate_msisdn:
             # Ask our delegated msisdn identity server
-            validation_session = await self.threepid_from_creds(
+            return await self.threepid_from_creds(
                 self.hs.config.registration.account_threepid_delegate_msisdn,
                 threepid_creds,
             )
 
-        return validation_session
+        return None
 
     async def proxy_msisdn_submit_token(
         self, id_server: str, client_secret: str, sid: str, token: str

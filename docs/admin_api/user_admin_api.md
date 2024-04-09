@@ -149,10 +149,11 @@ Body parameters:
   granting them access to the Admin API, among other things.
 - `deactivated` - **bool**, optional. If unspecified, deactivation state will be left unchanged.
 
-  Note: the `password` field must also be set if both of the following are true:
-  - `deactivated` is set to `false` and the user was previously deactivated (you are reactivating this user)
-  - Users are allowed to set their password on this homeserver (both `password_config.enabled` and
-    `password_config.localdb_enabled` config options are set to `true`).
+  Note:
+  - For the password field there is no strict check of the necessity for its presence.
+    It is possible to have active users without a password, e.g. when authenticating with OIDC is configured.
+    You must check yourself whether a password is required when reactivating a user or not.
+  - It is not possible to set a password if the config option `password_config.localdb_enabled` is set `false`.
   Users' passwords are wiped upon account deactivation, hence the need to set a new one here.
 
   Note: a user cannot be erased with this API. For more details on
@@ -163,6 +164,7 @@ Body parameters:
   Other allowed options are: `bot` and `support`.
 
 ## List Accounts
+### List Accounts (V2)
 
 This API returns all local user accounts.
 By default, the response is ordered by ascending user ID.
@@ -223,7 +225,7 @@ The following parameters should be set in the URL:
   **or** displaynames that contain this value.
 - `guests` - string representing a bool - Is optional and if `false` will **exclude** guest users.
   Defaults to `true` to include guest users. This parameter is not supported when MSC3861 is enabled. [See #15582](https://github.com/matrix-org/synapse/pull/15582)
-- `admins` - Optional flag to filter admins. If `true`, only admins are queried. If `false`, admins are excluded from 
+- `admins` - Optional flag to filter admins. If `true`, only admins are queried. If `false`, admins are excluded from
   the query. When the flag is absent (the default), **both** admins and non-admins are included in the search results.
 - `deactivated` - string representing a bool - Is optional and if `true` will **include** deactivated users.
   Defaults to `false` to exclude deactivated users.
@@ -272,7 +274,7 @@ The following fields are returned in the JSON response body:
   - `is_guest` - bool - Status if that user is a guest account.
   - `admin` - bool - Status if that user is a server administrator.
   - `user_type` - string - Type of the user. Normal users are type `None`.
-    This allows user type specific behaviour. There are also types `support` and `bot`. 
+    This allows user type specific behaviour. There are also types `support` and `bot`.
   - `deactivated` - bool - Status if that user has been marked as deactivated.
   - `erased` - bool - Status if that user has been marked as erased.
   - `shadow_banned` - bool - Status if that user has been marked as shadow banned.
@@ -285,6 +287,19 @@ The following fields are returned in the JSON response body:
 - `total` - integer - Total number of media.
 
 *Added in Synapse 1.93:* the `locked` query parameter and response field.
+
+### List Accounts (V3)
+
+This API returns all local user accounts (see v2). In contrast to v2, the query parameter `deactivated` is handled differently.
+
+```
+GET /_synapse/admin/v3/users
+```
+
+**Parameters**
+- `deactivated` - Optional flag to filter deactivated users. If `true`, only deactivated users are returned.
+  If `false`, deactivated users are excluded from the query. When the flag is absent (the default),
+  users are not filtered by deactivation status.
 
 ## Query current sessions for a user
 
@@ -618,6 +633,16 @@ A response body like the following is returned:
       "quarantined_by": null,
       "safe_from_quarantine": false,
       "upload_name": "test2.png"
+    },
+    {
+      "created_ts": 300400,
+      "last_access_ts": 300700,
+      "media_id": "BzYNLRUgGHphBkdKGbzXwbjX",
+      "media_length": 1337,
+      "media_type": "application/octet-stream",
+      "quarantined_by": null,
+      "safe_from_quarantine": false,
+      "upload_name": null
     }
   ],
   "next_token": 3,
@@ -679,16 +704,17 @@ The following fields are returned in the JSON response body:
 - `media` - An array of objects, each containing information about a media.
   Media objects contain the following fields:
   - `created_ts` - integer - Timestamp when the content was uploaded in ms.
-  - `last_access_ts` - integer - Timestamp when the content was last accessed in ms.
+  - `last_access_ts` - integer or null - Timestamp when the content was last accessed in ms.
+     Null if there was no access, yet.
   - `media_id` - string - The id used to refer to the media. Details about the format
     are documented under
     [media repository](../media_repository.md).
   - `media_length` - integer - Length of the media in bytes.
   - `media_type` - string - The MIME-type of the media.
-  - `quarantined_by` - string - The user ID that initiated the quarantine request
-    for this media.
+  - `quarantined_by` - string or null - The user ID that initiated the quarantine request
+    for this media. Null if not quarantined.
   - `safe_from_quarantine` - bool - Status if this media is safe from quarantining.
-  - `upload_name` - string - The name the media was uploaded with.
+  - `upload_name` - string or null - The name the media was uploaded with. Null if not provided during upload.
 - `next_token`: integer - Indication for pagination. See above.
 - `total` - integer - Total number of media.
 
@@ -773,6 +799,43 @@ Note: The token will expire if the *admin* user calls `/logout/all` from any
 of their devices, but the token will *not* expire if the target user does the
 same.
 
+## Allow replacing master cross-signing key without User-Interactive Auth
+
+This endpoint is not intended for server administrator usage;
+we describe it here for completeness.
+
+This API temporarily permits a user to replace their master cross-signing key
+without going through
+[user-interactive authentication](https://spec.matrix.org/v1.8/client-server-api/#user-interactive-authentication-api) (UIA).
+This is useful when Synapse has delegated its authentication to the
+[Matrix Authentication Service](https://github.com/matrix-org/matrix-authentication-service/);
+as Synapse cannot perform UIA is not possible in these circumstances.
+
+The API is
+
+```http request
+POST /_synapse/admin/v1/users/<user_id>/_allow_cross_signing_replacement_without_uia
+{}
+```
+
+If the user does not exist, or does exist but has no master cross-signing key,
+this will return with status code `404 Not Found`.
+
+Otherwise, a response body like the following is returned, with status `200 OK`:
+
+```json
+{
+    "updatable_without_uia_before_ms": 1234567890
+}
+```
+
+The response body is a JSON object with a single field:
+
+- `updatable_without_uia_before_ms`: integer. The timestamp in milliseconds
+  before which the user is permitted to replace their cross-signing key without
+  going through UIA.
+
+_Added in Synapse 1.97.0._
 
 ## User devices
 
@@ -839,7 +902,7 @@ The following fields are returned in the JSON response body:
 
 ### Create a device
 
-Creates a new device for a specific `user_id` and `device_id`. Does nothing if the `device_id` 
+Creates a new device for a specific `user_id` and `device_id`. Does nothing if the `device_id`
 exists already.
 
 The API is:
@@ -1206,11 +1269,11 @@ The following parameters should be set in the URL:
 
 ## Check username availability
 
-Checks to see if a username is available, and valid, for the server. See [the client-server 
+Checks to see if a username is available, and valid, for the server. See [the client-server
 API](https://matrix.org/docs/spec/client_server/r0.6.0#get-matrix-client-r0-register-available)
 for more information.
 
-This endpoint will work even if registration is disabled on the server, unlike 
+This endpoint will work even if registration is disabled on the server, unlike
 `/_matrix/client/r0/register/available`.
 
 The API is:

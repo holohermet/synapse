@@ -1,18 +1,24 @@
-# Copyright 2015, 2016 OpenMarket Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2017 Vector Creations Ltd
-# Copyright 2018 New Vector Ltd
+# Copyright 2015, 2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import logging
 import random
 from typing import TYPE_CHECKING, List, Optional, Tuple
@@ -24,6 +30,8 @@ if TYPE_CHECKING or HAS_PYDANTIC_V2:
     from pydantic.v1 import StrictBool, StrictStr, constr
 else:
     from pydantic import StrictBool, StrictStr, constr
+
+import attr
 from typing_extensions import Literal
 
 from twisted.web.server import Request
@@ -297,19 +305,16 @@ class DeactivateAccountRestServlet(RestServlet):
 
         requester = await self.auth.get_user_by_req(request)
 
-        # allow ASes to deactivate their own users
-        if requester.app_service:
-            await self._deactivate_account_handler.deactivate_account(
-                requester.user.to_string(), body.erase, requester
+        # allow ASes to deactivate their own users:
+        # ASes don't need user-interactive auth
+        if not requester.app_service:
+            await self.auth_handler.validate_user_via_ui_auth(
+                requester,
+                request,
+                body.dict(exclude_unset=True),
+                "deactivate your account",
             )
-            return 200, {}
 
-        await self.auth_handler.validate_user_via_ui_auth(
-            requester,
-            request,
-            body.dict(exclude_unset=True),
-            "deactivate your account",
-        )
         result = await self._deactivate_account_handler.deactivate_account(
             requester.user.to_string(), body.erase, requester, id_server=body.id_server
         )
@@ -595,7 +600,7 @@ class ThreepidRestServlet(RestServlet):
 
         threepids = await self.datastore.user_get_threepids(requester.user.to_string())
 
-        return 200, {"threepids": threepids}
+        return 200, {"threepids": [attr.asdict(t) for t in threepids]}
 
     # NOTE(dmr): I have chosen not to use Pydantic to parse this request's body, because
     # the endpoint is deprecated. (If you really want to, you could do this by reusing

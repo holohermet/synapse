@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2022 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the 'License');
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an 'AS IS' BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 from typing import Any, Dict, Optional, Sequence, Tuple
 
@@ -117,7 +124,7 @@ class ReceiptsBackgroundUpdateStoreTestCase(HomeserverTestCase):
             if expected_row is not None:
                 columns += expected_row.keys()
 
-            rows = self.get_success(
+            row_tuples = self.get_success(
                 self.store.db_pool.simple_select_list(
                     table=table,
                     keyvalues={
@@ -134,22 +141,22 @@ class ReceiptsBackgroundUpdateStoreTestCase(HomeserverTestCase):
 
             if expected_row is not None:
                 self.assertEqual(
-                    len(rows),
+                    len(row_tuples),
                     1,
                     f"Background update did not leave behind latest receipt in {table}",
                 )
                 self.assertEqual(
-                    rows[0],
-                    {
-                        "room_id": room_id,
-                        "receipt_type": receipt_type,
-                        "user_id": user_id,
-                        **expected_row,
-                    },
+                    row_tuples[0],
+                    (
+                        room_id,
+                        receipt_type,
+                        user_id,
+                        *expected_row.values(),
+                    ),
                 )
             else:
                 self.assertEqual(
-                    len(rows),
+                    len(row_tuples),
                     0,
                     f"Background update did not remove all duplicate receipts from {table}",
                 )

@@ -1,19 +1,25 @@
-# Copyright 2014-2016 OpenMarket Ltd
-# Copyright 2017 Vector Creations Ltd
-# Copyright 2018-2019 New Vector Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2019 The Matrix.org Foundation C.I.C.
+# Copyright 2017 Vector Creations Ltd
+# Copyright 2014-2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 """Tests REST events for /rooms paths."""
 
@@ -87,6 +93,7 @@ class RoomPermissionsTestCase(RoomBase):
     rmcreator_id = "@notme:red"
 
     def prepare(self, reactor: MemoryReactor, clock: Clock, hs: HomeServer) -> None:
+        self.store_controllers = hs.get_storage_controllers()
         self.helper.auth_user_id = self.rmcreator_id
         # create some rooms under the name rmcreator_id
         self.uncreated_rmid = "!aa:test"
@@ -475,6 +482,23 @@ class RoomPermissionsTestCase(RoomBase):
             membership=Membership.LEAVE,
             expect_code=HTTPStatus.OK,
         )
+
+    def test_default_call_invite_power_level(self) -> None:
+        pl_event = self.get_success(
+            self.store_controllers.state.get_current_state_event(
+                self.created_public_rmid, EventTypes.PowerLevels, ""
+            )
+        )
+        assert pl_event is not None
+        self.assertEqual(50, pl_event.content.get("m.call.invite"))
+
+        private_pl_event = self.get_success(
+            self.store_controllers.state.get_current_state_event(
+                self.created_rmid, EventTypes.PowerLevels, ""
+            )
+        )
+        assert private_pl_event is not None
+        self.assertEqual(None, private_pl_event.content.get("m.call.invite"))
 
 
 class RoomStateTestCase(RoomBase):
@@ -888,7 +912,8 @@ class RoomsCreateTestCase(RoomBase):
     )
     def test_room_creation_ratelimiting(self) -> None:
         """
-        Regression test for #14312, where ratelimiting was made too strict.
+        Regression test for https://github.com/matrix-org/synapse/issues/14312,
+        where ratelimiting was made too strict.
         Clients should be able to create 10 rooms in a row
         without hitting rate limits, using default rate limit config.
         (We override rate limiting config back to its default value.)
@@ -1215,9 +1240,9 @@ class RoomJoinTestCase(RoomBase):
         """
 
         # Register a dummy callback. Make it allow all room joins for now.
-        return_value: Union[
-            Literal["NOT_SPAM"], Tuple[Codes, dict], Codes
-        ] = synapse.module_api.NOT_SPAM
+        return_value: Union[Literal["NOT_SPAM"], Tuple[Codes, dict], Codes] = (
+            synapse.module_api.NOT_SPAM
+        )
 
         async def user_may_join_room(
             userid: str,
@@ -1447,6 +1472,30 @@ class RoomJoinRatelimitTestCase(RoomBase):
     @unittest.override_config(
         {"rc_joins": {"local": {"per_second": 0.5, "burst_count": 3}}}
     )
+    def test_join_attempts_local_ratelimit(self) -> None:
+        """Tests that unsuccessful joins that end up being denied are rate-limited."""
+        # Create 4 rooms
+        room_ids = [
+            self.helper.create_room_as(self.user_id, is_public=True) for _ in range(4)
+        ]
+        # Pre-emptively ban the user who will attempt to join.
+        joiner_user_id = self.register_user("joiner", "secret")
+        for room_id in room_ids:
+            self.helper.ban(room_id, self.user_id, joiner_user_id)
+
+        # Now make a new user try to join some of them.
+        # The user can make 3 requests, each of which should be denied.
+        for room_id in room_ids[0:3]:
+            self.helper.join(room_id, joiner_user_id, expect_code=HTTPStatus.FORBIDDEN)
+
+        # The fourth attempt should be rate limited.
+        self.helper.join(
+            room_ids[3], joiner_user_id, expect_code=HTTPStatus.TOO_MANY_REQUESTS
+        )
+
+    @unittest.override_config(
+        {"rc_joins": {"local": {"per_second": 0.5, "burst_count": 3}}}
+    )
     def test_join_local_ratelimit_profile_change(self) -> None:
         """Tests that sending a profile update into all of the user's joined rooms isn't
         rate-limited by the rate-limiter on joins."""
@@ -1633,9 +1682,9 @@ class RoomMessagesTestCase(RoomBase):
         expected_fields: dict,
     ) -> None:
         class SpamCheck:
-            mock_return_value: Union[
-                str, bool, Codes, Tuple[Codes, JsonDict], bool
-            ] = "NOT_SPAM"
+            mock_return_value: Union[str, bool, Codes, Tuple[Codes, JsonDict], bool] = (
+                "NOT_SPAM"
+            )
             mock_content: Optional[JsonDict] = None
 
             async def check_event_for_spam(
@@ -2125,6 +2174,33 @@ class RoomMessageListTestCase(RoomBase):
 
         chunk = channel.json_body["chunk"]
         self.assertEqual(len(chunk), 0, [event["content"] for event in chunk])
+
+
+class RoomMessageFilterTestCase(RoomBase):
+    """Tests /rooms/$room_id/messages REST events."""
+
+    user_id = "@sid1:red"
+
+    def prepare(self, reactor: MemoryReactor, clock: Clock, hs: HomeServer) -> None:
+        self.room_id = self.helper.create_room_as(self.user_id)
+
+    def test_room_message_filter_wildcard(self) -> None:
+        # Send a first message in the room, which will be removed by the purge.
+        self.helper.send(self.room_id, "message 1", type="f.message.1")
+        self.helper.send(self.room_id, "message 1", type="f.message.2")
+        self.helper.send(self.room_id, "not returned in filter")
+        channel = self.make_request(
+            "GET",
+            "/rooms/%s/messages?access_token=x&dir=b&filter=%s"
+            % (
+                self.room_id,
+                json.dumps({"types": ["f.message.*"]}),
+            ),
+        )
+        self.assertEqual(channel.code, HTTPStatus.OK, channel.json_body)
+
+        chunk = channel.json_body["chunk"]
+        self.assertEqual(len(chunk), 2, [event["content"] for event in chunk])
 
 
 class RoomSearchTestCase(unittest.HomeserverTestCase):

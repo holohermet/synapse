@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2021 Dirk Klimpel
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 from typing import List, Sequence
 
 from twisted.test.proto_helpers import MemoryReactor
@@ -477,6 +484,33 @@ class ServerNoticeTestCase(unittest.HomeserverTestCase):
         # second room has new ID
         self.assertNotEqual(first_room_id, second_room_id)
 
+    @override_config(
+        {"server_notices": {"system_mxid_localpart": "notices", "auto_join": True}}
+    )
+    def test_auto_join(self) -> None:
+        """
+        Tests that the user get automatically joined to the notice room
+        when `auto_join` setting is used.
+        """
+        # user has no room memberships
+        self._check_invite_and_join_status(self.other_user, 0, 0)
+
+        # send server notice
+        server_notice_request_content = {
+            "user_id": self.other_user,
+            "content": {"msgtype": "m.text", "body": "test msg one"},
+        }
+
+        self.make_request(
+            "POST",
+            self.url,
+            access_token=self.admin_user_tok,
+            content=server_notice_request_content,
+        )
+
+        # user has joined the room
+        self._check_invite_and_join_status(self.other_user, 0, 1)
+
     @override_config({"server_notices": {"system_mxid_localpart": "notices"}})
     def test_update_notice_user_name_when_changed(self) -> None:
         """
@@ -568,6 +602,115 @@ class ServerNoticeTestCase(unittest.HomeserverTestCase):
             state_key="@notices:test",
         )
         self.assertEqual(notice_user_state["avatar_url"], new_avatar_url)
+
+    @override_config(
+        {
+            "server_notices": {
+                "system_mxid_localpart": "notices",
+                "room_avatar_url": "test/url",
+                "room_topic": "Test Topic",
+            }
+        }
+    )
+    def test_notice_room_avatar_and_topic(self) -> None:
+        """
+        Tests that using `room_avatar_url` and `room_topic` config properly sets
+        those properties for the created notice rooms.
+        """
+        server_notice_request_content = {
+            "user_id": self.other_user,
+            "content": {"msgtype": "m.text", "body": "test msg one"},
+        }
+
+        self.make_request(
+            "POST",
+            self.url,
+            access_token=self.admin_user_tok,
+            content=server_notice_request_content,
+        )
+
+        invited_rooms = self._check_invite_and_join_status(self.other_user, 1, 0)
+        notice_room_id = invited_rooms[0].room_id
+        self.helper.join(
+            room=notice_room_id, user=self.other_user, tok=self.other_user_token
+        )
+
+        room_avatar_state = self.helper.get_state(
+            notice_room_id,
+            "m.room.avatar",
+            self.other_user_token,
+            state_key="",
+        )
+        self.assertEqual(room_avatar_state["url"], "test/url")
+
+        room_topic_state = self.helper.get_state(
+            notice_room_id,
+            "m.room.topic",
+            self.other_user_token,
+            state_key="",
+        )
+        self.assertEqual(room_topic_state["topic"], "Test Topic")
+
+    @override_config(
+        {
+            "server_notices": {
+                "system_mxid_localpart": "notices",
+                "room_avatar_url": "test/url",
+            }
+        }
+    )
+    def test_update_room_avatar_when_changed(self) -> None:
+        """
+        Tests that existing server notices room avatar is updated when it is
+        different from the one in homeserver config.
+        """
+        server_notice_request_content = {
+            "user_id": self.other_user,
+            "content": {"msgtype": "m.text", "body": "test msg one"},
+        }
+
+        self.make_request(
+            "POST",
+            self.url,
+            access_token=self.admin_user_tok,
+            content=server_notice_request_content,
+        )
+
+        invited_rooms = self._check_invite_and_join_status(self.other_user, 1, 0)
+        notice_room_id = invited_rooms[0].room_id
+        self.helper.join(
+            room=notice_room_id, user=self.other_user, tok=self.other_user_token
+        )
+
+        room_avatar_state = self.helper.get_state(
+            notice_room_id,
+            "m.room.avatar",
+            self.other_user_token,
+            state_key="",
+        )
+        self.assertEqual(room_avatar_state["url"], "test/url")
+
+        # simulate a change in server config after a server restart.
+        new_avatar_url = "test/new-url"
+        self.server_notices_manager._config.servernotices.server_notices_room_avatar_url = (
+            new_avatar_url
+        )
+        self.server_notices_manager.get_or_create_notice_room_for_user.cache.invalidate_all()
+
+        self.make_request(
+            "POST",
+            self.url,
+            access_token=self.admin_user_tok,
+            content=server_notice_request_content,
+        )
+
+        room_avatar_state = self.helper.get_state(
+            notice_room_id,
+            "m.room.avatar",
+            self.other_user_token,
+            state_key="",
+        )
+        self.assertEqual(room_avatar_state["url"], new_avatar_url)
 
     def _check_invite_and_join_status(
         self, user_id: str, expected_invites: int, expected_memberships: int

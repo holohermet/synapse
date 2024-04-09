@@ -1,17 +1,24 @@
-# Copyright 2020 Quentin Gliech
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2020-2021 The Matrix.org Foundation C.I.C.
+# Copyright 2020 Quentin Gliech
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 from collections import Counter
 from typing import Any, Collection, Iterable, List, Mapping, Optional, Tuple, Type
@@ -294,6 +301,19 @@ def _parse_oidc_config_dict(
                 config_path + ("client_secret",),
             )
 
+    # If no client secret is specified then the auth method must be None
+    client_auth_method = oidc_config.get("client_auth_method")
+    if client_secret is None and client_secret_jwt_key is None:
+        if client_auth_method is None:
+            client_auth_method = "none"
+        elif client_auth_method != "none":
+            raise ConfigError(
+                "No 'client_secret' is set in OIDC config, and 'client_auth_method' is not set to 'none'"
+            )
+
+    if client_auth_method is None:
+        client_auth_method = "client_secret_basic"
+
     return OidcProviderConfig(
         idp_id=idp_id,
         idp_name=oidc_config.get("idp_name", "OIDC"),
@@ -304,7 +324,7 @@ def _parse_oidc_config_dict(
         client_id=oidc_config["client_id"],
         client_secret=client_secret,
         client_secret_jwt_key=client_secret_jwt_key,
-        client_auth_method=oidc_config.get("client_auth_method", "client_secret_basic"),
+        client_auth_method=client_auth_method,
         pkce_method=oidc_config.get("pkce_method", "auto"),
         scopes=oidc_config.get("scopes", ["openid"]),
         authorization_endpoint=oidc_config.get("authorization_endpoint"),
@@ -322,6 +342,9 @@ def _parse_oidc_config_dict(
         user_mapping_provider_config=user_mapping_provider_config,
         attribute_requirements=attribute_requirements,
         enable_registration=oidc_config.get("enable_registration", True),
+        additional_authorization_parameters=oidc_config.get(
+            "additional_authorization_parameters", {}
+        ),
     )
 
 
@@ -424,3 +447,6 @@ class OidcProviderConfig:
 
     # Whether automatic registrations are enabled in the ODIC flow. Defaults to True
     enable_registration: bool
+
+    # Additional parameters that will be passed to the authorization grant URL
+    additional_authorization_parameters: Mapping[str, str]

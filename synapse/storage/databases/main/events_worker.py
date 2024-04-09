@@ -1,16 +1,22 @@
-# Copyright 2018 New Vector Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This file is licensed under the Affero General Public License (AGPL) version 3.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
+#
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import logging
 import threading
@@ -257,11 +263,13 @@ class EventsWorkerStore(SQLBaseStore):
                 5 * 60 * 1000,
             )
 
-        self._get_event_cache: AsyncLruCache[
-            Tuple[str], EventCacheEntry
-        ] = AsyncLruCache(
-            cache_name="*getEvent*",
-            max_size=hs.config.caches.event_cache_size,
+        self._get_event_cache: AsyncLruCache[Tuple[str], EventCacheEntry] = (
+            AsyncLruCache(
+                cache_name="*getEvent*",
+                max_size=hs.config.caches.event_cache_size,
+                # `extra_index_cb` Returns a tuple as that is the key type
+                extra_index_cb=lambda _, v: (v.event.room_id,),
+            )
         )
 
         # Map from event ID to a deferred that will result in a map from event
@@ -451,8 +459,7 @@ class EventsWorkerStore(SQLBaseStore):
         allow_rejected: bool = ...,
         allow_none: Literal[False] = ...,
         check_room_id: Optional[str] = ...,
-    ) -> EventBase:
-        ...
+    ) -> EventBase: ...
 
     @overload
     async def get_event(
@@ -463,8 +470,7 @@ class EventsWorkerStore(SQLBaseStore):
         allow_rejected: bool = ...,
         allow_none: Literal[True] = ...,
         check_room_id: Optional[str] = ...,
-    ) -> Optional[EventBase]:
-        ...
+    ) -> Optional[EventBase]: ...
 
     @cancellable
     async def get_event(
@@ -776,9 +782,9 @@ class EventsWorkerStore(SQLBaseStore):
 
         if missing_events_ids:
 
-            async def get_missing_events_from_cache_or_db() -> Dict[
-                str, EventCacheEntry
-            ]:
+            async def get_missing_events_from_cache_or_db() -> (
+                Dict[str, EventCacheEntry]
+            ):
                 """Fetches the events in `missing_event_ids` from the database.
 
                 Also creates entries in `self._current_event_fetches` to allow
@@ -792,9 +798,9 @@ class EventsWorkerStore(SQLBaseStore):
                 # to all the events we pulled from the DB (this will result in this
                 # function returning more events than requested, but that can happen
                 # already due to `_get_events_from_db`).
-                fetching_deferred: ObservableDeferred[
-                    Dict[str, EventCacheEntry]
-                ] = ObservableDeferred(defer.Deferred(), consumeErrors=True)
+                fetching_deferred: ObservableDeferred[Dict[str, EventCacheEntry]] = (
+                    ObservableDeferred(defer.Deferred(), consumeErrors=True)
+                )
                 for event_id in missing_events_ids:
                     self._current_event_fetches[event_id] = fetching_deferred
 
@@ -904,12 +910,12 @@ class EventsWorkerStore(SQLBaseStore):
         self._event_ref.pop(event_id, None)
         self._current_event_fetches.pop(event_id, None)
 
-    def _invalidate_local_get_event_cache_all(self) -> None:
-        """Clears the in-memory get event caches.
+    def _invalidate_local_get_event_cache_room_id(self, room_id: str) -> None:
+        """Clears the in-memory get event caches for a room.
 
         Used when we purge room history.
         """
-        self._get_event_cache.clear()
+        self._get_event_cache.invalidate_on_extra_index_local((room_id,))
         self._event_ref.clear()
         self._current_event_fetches.clear()
 
@@ -1312,7 +1318,8 @@ class EventsWorkerStore(SQLBaseStore):
             room_version: Optional[RoomVersion]
             if not room_version_id:
                 # this should only happen for out-of-band membership events which
-                # arrived before #6983 landed. For all other events, we should have
+                # arrived before https://github.com/matrix-org/synapse/issues/6983
+                # landed. For all other events, we should have
                 # an entry in the 'rooms' table.
                 #
                 # However, the 'out_of_band_membership' flag is unreliable for older
@@ -1323,7 +1330,8 @@ class EventsWorkerStore(SQLBaseStore):
                         "Room %s for event %s is unknown" % (d["room_id"], event_id)
                     )
 
-                # so, assuming this is an out-of-band-invite that arrived before #6983
+                # so, assuming this is an out-of-band-invite that arrived before
+                # https://github.com/matrix-org/synapse/issues/6983
                 # landed, we know that the room version must be v5 or earlier (because
                 # v6 hadn't been invented at that point, so invites from such rooms
                 # would have been rejected.)
@@ -1488,7 +1496,7 @@ class EventsWorkerStore(SQLBaseStore):
                     room_version_id=row[5],
                     rejected_reason=row[6],
                     redactions=[],
-                    outlier=row[7],
+                    outlier=bool(row[7]),  # This is an int in SQLite3
                 )
 
             # check for redactions
@@ -1584,16 +1592,19 @@ class EventsWorkerStore(SQLBaseStore):
         """Given a list of event ids, check if we have already processed and
         stored them as non outliers.
         """
-        rows = await self.db_pool.simple_select_many_batch(
-            table="events",
-            retcols=("event_id",),
-            column="event_id",
-            iterable=list(event_ids),
-            keyvalues={"outlier": False},
-            desc="have_events_in_timeline",
+        rows = cast(
+            List[Tuple[str]],
+            await self.db_pool.simple_select_many_batch(
+                table="events",
+                retcols=("event_id",),
+                column="event_id",
+                iterable=list(event_ids),
+                keyvalues={"outlier": False},
+                desc="have_events_in_timeline",
+            ),
         )
 
-        return {r["event_id"] for r in rows}
+        return {r[0] for r in rows}
 
     @trace
     @tag_args
@@ -1858,14 +1869,14 @@ class EventsWorkerStore(SQLBaseStore):
                 " LIMIT ?"
             )
             txn.execute(sql, (-last_id, -current_id, instance_name, limit))
-            new_event_updates: List[
-                Tuple[int, Tuple[str, str, str, str, str, str]]
-            ] = []
+            new_event_updates: List[Tuple[int, Tuple[str, str, str, str, str, str]]] = (
+                []
+            )
             row: Tuple[int, str, str, str, str, str, str]
             # Type safety: iterating over `txn` yields `Tuple`, i.e.
             # `Tuple[Any, ...]` of arbitrary length. Mypy detects assigning a
             # variadic tuple to a fixed length tuple and flags it up as an error.
-            for row in txn:  # type: ignore[assignment]
+            for row in txn:
                 new_event_updates.append((row[0], row[1:]))
 
             limited = False
@@ -1892,7 +1903,7 @@ class EventsWorkerStore(SQLBaseStore):
             # Type safety: iterating over `txn` yields `Tuple`, i.e.
             # `Tuple[Any, ...]` of arbitrary length. Mypy detects assigning a
             # variadic tuple to a fixed length tuple and flags it up as an error.
-            for row in txn:  # type: ignore[assignment]
+            for row in txn:
                 new_event_updates.append((row[0], row[1:]))
 
             if len(new_event_updates) >= limit:
@@ -1984,18 +1995,20 @@ class EventsWorkerStore(SQLBaseStore):
         return rows, to_token, True
 
     @cached(max_entries=5000)
-    async def get_event_ordering(self, event_id: str) -> Tuple[int, int]:
+    async def get_event_ordering(self, event_id: str, room_id: str) -> Tuple[int, int]:
         res = await self.db_pool.simple_select_one(
             table="events",
             retcols=["topological_ordering", "stream_ordering"],
-            keyvalues={"event_id": event_id},
+            keyvalues={"event_id": event_id, "room_id": room_id},
             allow_none=True,
         )
 
         if not res:
-            raise SynapseError(404, "Could not find event %s" % (event_id,))
+            raise SynapseError(
+                404, "Could not find event %s in room %s" % (event_id, room_id)
+            )
 
-        return int(res["topological_ordering"]), int(res["stream_ordering"])
+        return int(res[0]), int(res[1])
 
     async def get_next_event_to_expire(self) -> Optional[Tuple[str, int]]:
         """Retrieve the entry with the lowest expiry timestamp in the event_expiry
@@ -2092,12 +2105,6 @@ class EventsWorkerStore(SQLBaseStore):
 
         def _cleanup_old_transaction_ids_txn(txn: LoggingTransaction) -> None:
             one_day_ago = self._clock.time_msec() - 24 * 60 * 60 * 1000
-            sql = """
-                DELETE FROM event_txn_id
-                WHERE inserted_ts < ?
-            """
-            txn.execute(sql, (one_day_ago,))
-
             sql = """
                 DELETE FROM event_txn_id_device_id
                 WHERE inserted_ts < ?
@@ -2336,15 +2343,18 @@ class EventsWorkerStore(SQLBaseStore):
             a dict mapping from event id to partial-stateness. We return True for
             any of the events which are unknown (or are outliers).
         """
-        result = await self.db_pool.simple_select_many_batch(
-            table="partial_state_events",
-            column="event_id",
-            iterable=event_ids,
-            retcols=["event_id"],
-            desc="get_partial_state_events",
+        result = cast(
+            List[Tuple[str]],
+            await self.db_pool.simple_select_many_batch(
+                table="partial_state_events",
+                column="event_id",
+                iterable=event_ids,
+                retcols=["event_id"],
+                desc="get_partial_state_events",
+            ),
         )
         # convert the result to a dict, to make @cachedList work
-        partial = {r["event_id"] for r in result}
+        partial = {r[0] for r in result}
         return {e_id: e_id in partial for e_id in event_ids}
 
     @cached()

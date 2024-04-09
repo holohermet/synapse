@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2014-2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import json
 import logging
@@ -93,7 +100,7 @@ class Clock:
 
     _reactor: IReactorTime = attr.ib()
 
-    @defer.inlineCallbacks  # type: ignore[arg-type]  # Issue in Twisted's type annotations
+    @defer.inlineCallbacks
     def sleep(self, seconds: float) -> "Generator[Deferred[float], Any, Any]":
         d: defer.Deferred[float] = defer.Deferred()
         with context.PreserveLoggingContext():
@@ -110,7 +117,11 @@ class Clock:
         return int(self.time() * 1000)
 
     def looping_call(
-        self, f: Callable[P, object], msec: float, *args: P.args, **kwargs: P.kwargs
+        self,
+        f: Callable[P, object],
+        msec: float,
+        *args: P.args,
+        **kwargs: P.kwargs,
     ) -> LoopingCall:
         """Call a function repeatedly.
 
@@ -127,12 +138,46 @@ class Clock:
         Args:
             f: The function to call repeatedly.
             msec: How long to wait between calls in milliseconds.
-            *args: Postional arguments to pass to function.
+            *args: Positional arguments to pass to function.
             **kwargs: Key arguments to pass to function.
         """
+        return self._looping_call_common(f, msec, False, *args, **kwargs)
+
+    def looping_call_now(
+        self,
+        f: Callable[P, object],
+        msec: float,
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> LoopingCall:
+        """Call a function immediately, and then repeatedly thereafter.
+
+        As with `looping_call`: subsequent calls are not scheduled until after the
+        the Awaitable returned by a previous call has finished.
+
+        Also as with `looping_call`: the function is called with no logcontext and
+        you probably want to wrap it in `run_as_background_process`.
+
+        Args:
+            f: The function to call repeatedly.
+            msec: How long to wait between calls in milliseconds.
+            *args: Positional arguments to pass to function.
+            **kwargs: Key arguments to pass to function.
+        """
+        return self._looping_call_common(f, msec, True, *args, **kwargs)
+
+    def _looping_call_common(
+        self,
+        f: Callable[P, object],
+        msec: float,
+        now: bool,
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> LoopingCall:
+        """Common functionality for `looping_call` and `looping_call_now`"""
         call = task.LoopingCall(f, *args, **kwargs)
         call.clock = self._reactor
-        d = call.start(msec / 1000.0, now=False)
+        d = call.start(msec / 1000.0, now=now)
         d.addErrback(log_failure, "Looping call died", consumeErrors=False)
         return call
 

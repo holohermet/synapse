@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2017 Vector Creations Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import logging
 import re
@@ -20,7 +27,6 @@ from typing import (
     Collection,
     Iterable,
     List,
-    Mapping,
     Optional,
     Sequence,
     Set,
@@ -410,25 +416,24 @@ class UserDirectoryBackgroundUpdateStore(StateDeltasStore):
             )
 
             # Next fetch their profiles. Note that not all users have profiles.
-            profile_rows = self.db_pool.simple_select_many_txn(
-                txn,
-                table="profiles",
-                column="full_user_id",
-                iterable=list(users_to_insert),
-                retcols=(
-                    "full_user_id",
-                    "displayname",
-                    "avatar_url",
+            profile_rows = cast(
+                List[Tuple[str, Optional[str], Optional[str]]],
+                self.db_pool.simple_select_many_txn(
+                    txn,
+                    table="profiles",
+                    column="full_user_id",
+                    iterable=list(users_to_insert),
+                    retcols=(
+                        "full_user_id",
+                        "displayname",
+                        "avatar_url",
+                    ),
+                    keyvalues={},
                 ),
-                keyvalues={},
             )
             profiles = {
-                row["full_user_id"]: _UserDirProfile(
-                    row["full_user_id"],
-                    row["displayname"],
-                    row["avatar_url"],
-                )
-                for row in profile_rows
+                full_user_id: _UserDirProfile(full_user_id, displayname, avatar_url)
+                for full_user_id, displayname, avatar_url in profile_rows
             }
 
             profiles_to_insert = [
@@ -517,18 +522,21 @@ class UserDirectoryBackgroundUpdateStore(StateDeltasStore):
             and not self.get_if_app_services_interested_in_user(user)  # type: ignore[attr-defined]
         ]
 
-        rows = self.db_pool.simple_select_many_txn(
-            txn,
-            table="users",
-            column="name",
-            iterable=users,
-            keyvalues={
-                "deactivated": 0,
-            },
-            retcols=("name", "user_type"),
+        rows = cast(
+            List[Tuple[str, Optional[str]]],
+            self.db_pool.simple_select_many_txn(
+                txn,
+                table="users",
+                column="name",
+                iterable=users,
+                keyvalues={
+                    "deactivated": 0,
+                },
+                retcols=("name", "user_type"),
+            ),
         )
 
-        return [row["name"] for row in rows if row["user_type"] != UserTypes.SUPPORT]
+        return [name for name, user_type in rows if user_type != UserTypes.SUPPORT]
 
     async def is_room_world_readable_or_publicly_joinable(self, room_id: str) -> bool:
         """Check if the room is either world_readable or publically joinable"""
@@ -737,9 +745,11 @@ class UserDirectoryBackgroundUpdateStore(StateDeltasStore):
                         p.user_id,
                         get_localpart_from_id(p.user_id),
                         get_domain_from_id(p.user_id),
-                        _filter_text_for_index(p.display_name)
-                        if p.display_name
-                        else None,
+                        (
+                            _filter_text_for_index(p.display_name)
+                            if p.display_name
+                            else None
+                        ),
                     )
                     for p in profiles
                 ],
@@ -831,13 +841,25 @@ class UserDirectoryBackgroundUpdateStore(StateDeltasStore):
             "delete_all_from_user_dir", _delete_all_from_user_dir_txn
         )
 
-    async def _get_user_in_directory(self, user_id: str) -> Optional[Mapping[str, str]]:
-        return await self.db_pool.simple_select_one(
-            table="user_directory",
-            keyvalues={"user_id": user_id},
-            retcols=("display_name", "avatar_url"),
-            allow_none=True,
-            desc="get_user_in_directory",
+    async def _get_user_in_directory(
+        self, user_id: str
+    ) -> Optional[Tuple[Optional[str], Optional[str]]]:
+        """
+        Fetch the user information in the user directory.
+
+        Returns:
+            None if the user is unknown, otherwise a tuple of display name and
+            avatar URL (both of which may be None).
+        """
+        return cast(
+            Optional[Tuple[Optional[str], Optional[str]]],
+            await self.db_pool.simple_select_one(
+                table="user_directory",
+                keyvalues={"user_id": user_id},
+                retcols=("display_name", "avatar_url"),
+                allow_none=True,
+                desc="get_user_in_directory",
+            ),
         )
 
     async def update_user_directory_stream_pos(self, stream_id: Optional[int]) -> None:
@@ -1143,15 +1165,19 @@ class UserDirectoryStore(UserDirectoryBackgroundUpdateStore):
             raise Exception("Unrecognized database engine")
 
         results = cast(
-            List[UserProfile],
-            await self.db_pool.execute(
-                "search_user_dir", self.db_pool.cursor_to_dict, sql, *args
-            ),
+            List[Tuple[str, Optional[str], Optional[str]]],
+            await self.db_pool.execute("search_user_dir", sql, *args),
         )
 
         limited = len(results) > limit
 
-        return {"limited": limited, "results": results[0:limit]}
+        return {
+            "limited": limited,
+            "results": [
+                {"user_id": r[0], "display_name": r[1], "avatar_url": r[2]}
+                for r in results[0:limit]
+            ],
+        }
 
 
 def _filter_text_for_index(text: str) -> str:

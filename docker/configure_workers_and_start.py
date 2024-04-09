@@ -1,17 +1,24 @@
 #!/usr/bin/env python
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2021 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 # This script reads environment variables and generates a shared Synapse worker,
 # nginx and supervisord configs depending on the workers requested.
@@ -52,6 +59,7 @@ import platform
 import re
 import subprocess
 import sys
+from argparse import ArgumentParser
 from collections import defaultdict
 from itertools import chain
 from pathlib import Path
@@ -1018,6 +1026,14 @@ def generate_worker_log_config(
 
 
 def main(args: List[str], environ: MutableMapping[str, str]) -> None:
+    parser = ArgumentParser()
+    parser.add_argument(
+        "--generate-only",
+        action="store_true",
+        help="Only generate configuration; don't run Synapse.",
+    )
+    opts = parser.parse_args(args)
+
     config_dir = environ.get("SYNAPSE_CONFIG_DIR", "/data")
     config_path = environ.get("SYNAPSE_CONFIG_PATH", config_dir + "/homeserver.yaml")
     data_dir = environ.get("SYNAPSE_DATA_DIR", "/data")
@@ -1059,6 +1075,10 @@ def main(args: List[str], environ: MutableMapping[str, str]) -> None:
     else:
         log("Worker config exists—not regenerating")
 
+    if opts.generate_only:
+        log("--generate-only: won't run Synapse")
+        return
+
     # Lifted right out of start.py
     jemallocpath = "/usr/lib/%s-linux-gnu/libjemalloc.so.2" % (platform.machine(),)
 
@@ -1081,4 +1101,4 @@ def main(args: List[str], environ: MutableMapping[str, str]) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv, os.environ)
+    main(sys.argv[1:], os.environ)

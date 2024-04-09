@@ -1,16 +1,22 @@
-# Copyright 2019 New Vector Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This file is licensed under the Affero General Public License (AGPL) version 3.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
+#
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 """
 The Federation Sender is responsible for sending Persistent Data Units (PDUs)
 and Ephemeral Data Units (EDUs) to other homeservers using
@@ -67,7 +73,7 @@ The loop continues so long as there is anything to send. At each iteration of th
 
 When the `PerDestinationQueue` has the catch-up flag set, the *Catch-Up Transmission Loop*
 (`_catch_up_transmission_loop`) is used in lieu of the regular `_transaction_transmission_loop`.
-(Only once the catch-up mode has been exited can the regular tranaction transmission behaviour
+(Only once the catch-up mode has been exited can the regular transaction transmission behaviour
 be resumed.)
 
 *Catch-Up Mode*, entered upon Synapse startup or once a homeserver has fallen behind due to
@@ -186,10 +192,9 @@ sent_pdus_destination_dist_total = Counter(
 )
 
 # Time (in s) to wait before trying to wake up destinations that have
-# catch-up outstanding. This will also be the delay applied at startup
-# before trying the same.
+# catch-up outstanding.
 # Please note that rate limiting still applies, so while the loop is
-# executed every X seconds the destinations may not be wake up because
+# executed every X seconds the destinations may not be woken up because
 # they are being rate limited following previous attempt failures.
 WAKEUP_RETRY_PERIOD_SEC = 60
 
@@ -422,17 +427,16 @@ class FederationSender(AbstractFederationSender):
             / hs.config.ratelimiting.federation_rr_transactions_per_room_per_second
         )
 
+        self._external_cache = hs.get_external_cache()
+        self._destination_wakeup_queue = _DestinationWakeupQueue(self, self.clock)
+
         # Regularly wake up destinations that have outstanding PDUs to be caught up
-        self.clock.looping_call(
+        self.clock.looping_call_now(
             run_as_background_process,
             WAKEUP_RETRY_PERIOD_SEC * 1000.0,
             "wake_destinations_needing_catchup",
             self._wake_destinations_needing_catchup,
         )
-
-        self._external_cache = hs.get_external_cache()
-
-        self._destination_wakeup_queue = _DestinationWakeupQueue(self, self.clock)
 
     def _get_per_destination_queue(self, destination: str) -> PerDestinationQueue:
         """Get or create a PerDestinationQueue for the given destination
@@ -581,14 +585,14 @@ class FederationSender(AbstractFederationSender):
                                 "get_joined_hosts", str(sg)
                             )
                             if destinations is None:
-                                # Add logging to help track down #13444
+                                # Add logging to help track down https://github.com/matrix-org/synapse/issues/13444
                                 logger.info(
                                     "Unexpectedly did not have cached destinations for %s / %s",
                                     sg,
                                     event.event_id,
                                 )
                         else:
-                            # Add logging to help track down #13444
+                            # Add logging to help track down https://github.com/matrix-org/synapse/issues/13444
                             logger.info(
                                 "Unexpectedly did not have cached prev group for %s",
                                 event.event_id,
@@ -844,7 +848,7 @@ class FederationSender(AbstractFederationSender):
         destinations (list[str])
         """
 
-        if not states or not self.hs.config.server.use_presence:
+        if not states or not self.hs.config.server.track_presence:
             # No-op if presence is disabled.
             return
 

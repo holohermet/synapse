@@ -33,6 +33,23 @@ In addition, configuration options referring to size use the following suffixes:
 For example, setting `max_avatar_size: 10M` means that Synapse will not accept files larger than 10,485,760 bytes
 for a user avatar.
 
+## Config Validation
+
+The configuration file can be validated with the following command:
+```bash
+python -m synapse.config read <config key to print> -c <path to config>
+```
+
+To validate the entire file, omit `read <config key to print>`:
+```bash
+python -m synapse.config -c <path to config>
+```
+
+To see how to set other options, check the help reference:
+```bash
+python -m synapse.config --help
+```
+
 ### YAML
 The configuration file is a [YAML](https://yaml.org/) file, which means that certain syntax rules
 apply if you want your config file to be read properly. A few helpful things to know:
@@ -230,6 +247,13 @@ Example configuration:
 presence:
   enabled: false
 ```
+
+`enabled` can also be set to a special value of "untracked" which ignores updates
+received via clients and federation, while still accepting updates from the
+[module API](../../modules/index.md).
+
+*The "untracked" option was added in Synapse 1.96.0.*
+
 ---
 ### `require_auth_for_profile_requests`
 
@@ -471,10 +495,10 @@ Unix socket support (_Added in Synapse 1.89.0_):
   * **Note**: The use of both `path` and `port` options for the same `listener` is not
     compatible.
   * The `x_forwarded` option defaults to true  when using Unix sockets and can be omitted.
-  * Other options that would not make sense to use with a UNIX socket, such as 
+  * Other options that would not make sense to use with a UNIX socket, such as
     `bind_addresses` and `tls` will be ignored and can be removed.
 * `mode`: The file permissions to set on the UNIX socket. Defaults to `666`
-* **Note:** Must be set as `type: http` (does not support `metrics` and `manhole`). 
+* **Note:** Must be set as `type: http` (does not support `metrics` and `manhole`).
   Also make sure that `metrics` is not included in `resources` -> `names`
 
 
@@ -525,7 +549,7 @@ listeners:
   # that unwraps TLS.
   #
   # If you plan to use a reverse proxy, please see
-  # https://matrix-org.github.io/synapse/latest/reverse_proxy.html.
+  # https://element-hq.github.io/synapse/latest/reverse_proxy.html.
   #
   - port: 8008
     tls: false
@@ -557,9 +581,9 @@ listeners:
   # conflicts, and providing enhanced security through system file permissions.
   #
   # Note that x_forwarded will default to true, when using a UNIX socket. Please see
-  # https://matrix-org.github.io/synapse/latest/reverse_proxy.html.
+  # https://element-hq.github.io/synapse/latest/reverse_proxy.html.
   #
-  - path: /var/run/synapse/main_public.sock
+  - path: /run/synapse/main_public.sock
     type: http
     resources:
       - names: [client, federation]
@@ -656,6 +680,11 @@ This setting has the following sub-options:
    has missed. Disabled by default.
 * `notif_for_new_users`: Set to false to disable automatic subscription to email
    notifications for new users. Enabled by default.
+* `notif_delay_before_mail`: The time to wait before emailing about a notification.
+  This gives the user a chance to view the message via push or an open client.
+  Defaults to 10 minutes.
+
+  _New in Synapse 1.99.0._
 * `client_base_url`: Custom URL for client links within the email notifications. By default
    links will be based on "https://matrix.to". (This setting used to be called `riot_base_url`;
    the old name is still supported for backwards-compatibility but is now deprecated.)
@@ -1387,7 +1416,7 @@ kill -HUP [PID_OF_SYNAPSE_PROCESS]
 If you are running multiple workers, you must individually update the worker
 config file and send this signal to each worker process.
 
-If you're using the [example systemd service](https://github.com/matrix-org/synapse/blob/develop/contrib/systemd/matrix-synapse.service)
+If you're using the [example systemd service](https://github.com/element-hq/synapse/blob/develop/contrib/systemd/matrix-synapse.service)
 file in Synapse's `contrib` directory, you can send a `SIGHUP` signal by using
 `systemctl reload matrix-synapse`.
 
@@ -1440,7 +1469,7 @@ database:
   args:
     user: synapse_user
     password: secretpassword
-    database: synapse
+    dbname: synapse
     host: localhost
     port: 5432
     cp_min: 5
@@ -1519,7 +1548,7 @@ databases:
     args:
       user: synapse_user
       password: secretpassword
-      database: synapse_main
+      dbname: synapse_main
       host: localhost
       port: 5432
       cp_min: 5
@@ -1532,7 +1561,7 @@ databases:
     args:
       user: synapse_user
       password: secretpassword
-      database: synapse_state
+      dbname: synapse_state
       host: localhost
       port: 5432
       cp_min: 5
@@ -1746,6 +1775,19 @@ rc_third_party_invite:
   burst_count: 10
 ```
 ---
+### `rc_media_create`
+
+This option ratelimits creation of MXC URIs via the `/_matrix/media/v1/create`
+endpoint based on the account that's creating the media. Defaults to
+`per_second: 10`, `burst_count: 50`.
+
+Example configuration:
+```yaml
+rc_media_create:
+  per_second: 10
+  burst_count: 50
+```
+---
 ### `rc_federation`
 
 Defines limits on federation requests.
@@ -1805,6 +1847,27 @@ Directory where uploaded images and attachments are stored.
 Example configuration:
 ```yaml
 media_store_path: "DATADIR/media_store"
+```
+---
+### `max_pending_media_uploads`
+
+How many *pending media uploads* can a given user have? A pending media upload
+is a created MXC URI that (a) is not expired (the `unused_expires_at` timestamp
+has not passed) and (b) the media has not yet been uploaded for. Defaults to 5.
+
+Example configuration:
+```yaml
+max_pending_media_uploads: 5
+```
+---
+### `unused_expiration_time`
+
+How long to wait in milliseconds before expiring created media IDs. Defaults to
+"24h"
+
+Example configuration:
+```yaml
+unused_expiration_time: "1h"
 ```
 ---
 ### `media_storage_providers`
@@ -2617,7 +2680,7 @@ Example configuration:
 refreshable_access_token_lifetime: 10m
 ```
 ---
-### `refresh_token_lifetime: 24h`
+### `refresh_token_lifetime`
 
 Time that a refresh token remains valid for (provided that it is not
 exchanged for another one first).
@@ -2716,6 +2779,10 @@ enable_metrics: true
 Use this option to enable sentry integration. Provide the DSN assigned to you by sentry
 with the `dsn` setting.
 
+ An optional `environment` field can be used to specify an environment. This allows
+ for log maintenance based on different environments, ensuring better organization
+ and analysis..
+
 NOTE: While attempts are made to ensure that the logs don't contain
 any sensitive information, this cannot be guaranteed. By enabling
 this option the sentry server may therefore receive sensitive
@@ -2725,6 +2792,7 @@ through insecure notification channels if so configured.
 Example configuration:
 ```yaml
 sentry:
+    environment: "production"
     dsn: "..."
 ```
 ---
@@ -2874,7 +2942,7 @@ access tokens via a query parameter.
 
 Example configuration:
 ```yaml
-use_appservice_legacy_authorization: true 
+use_appservice_legacy_authorization: true
 ```
 
 ---
@@ -3281,6 +3349,9 @@ Options for each entry include:
    not included in `scopes`. Set to `userinfo_endpoint` to always use the
    userinfo endpoint.
 
+* `additional_authorization_parameters`: String to string dictionary that will be passed as
+   additional parameters to the authorization grant URL.
+
 * `allow_existing_users`: set to true to allow a user logging in via OIDC to
    match a pre-existing account instead of failing. This could be used if
    switching from password logins to OIDC. Defaults to false.
@@ -3405,6 +3476,8 @@ oidc_providers:
     token_endpoint: "https://accounts.example.com/oauth2/token"
     userinfo_endpoint: "https://accounts.example.com/userinfo"
     jwks_uri: "https://accounts.example.com/.well-known/jwks.json"
+    additional_authorization_parameters:
+      acr_values: 2fa
     skip_verification: true
     enable_registration: true
     user_mapping_provider:
@@ -3555,7 +3628,7 @@ This setting has the following sub-options:
 * `enabled`: Defaults to true.
    Set to false to disable password authentication.
    Set to `only_for_reauth` to allow users with existing passwords to use them
-   to log in and reauthenticate, whilst preventing new users from setting passwords.
+   to reauthenticate (not log in), whilst preventing new users from setting passwords.
 * `localdb_enabled`: Set to false to disable authentication against the local password
    database. This is ignored if `enabled` is false, and is only useful
    if you have other `password_providers`. Defaults to true.
@@ -3774,14 +3847,23 @@ Sub-options for this setting include:
 * `system_mxid_display_name`: set the display name of the "notices" user
 * `system_mxid_avatar_url`: set the avatar for the "notices" user
 * `room_name`: set the room name of the server notices room
+* `room_avatar_url`: optional string. The room avatar to use for server notice rooms. If set to the empty string `""`, notice rooms will not be given an avatar. Defaults to the empty string. _Added in Synapse 1.99.0._
+* `room_topic`: optional string. The topic to use for server notice rooms. If set to the empty string `""`, notice rooms will not be given a topic. Defaults to the empty string.  _Added in Synapse 1.99.0._
+* `auto_join`: boolean. If true, the user will be automatically joined to the room instead of being invited.
+  Defaults to false. _Added in Synapse 1.98.0._
+
+Note that the name, topic and avatar of existing server notice rooms will only be updated when a new notice event is sent.
 
 Example configuration:
 ```yaml
 server_notices:
   system_mxid_localpart: notices
   system_mxid_display_name: "Server Notices"
-  system_mxid_avatar_url: "mxc://server.com/oumMVlgDnLYFaPVkExemNVVZ"
+  system_mxid_avatar_url: "mxc://example.com/oumMVlgDnLYFaPVkExemNVVZ"
   room_name: "Server Notices"
+  room_avatar_url: "mxc://example.com/oumMVlgDnLYFaPVkExemNVVZ"
+  room_topic: "Room used by your server admin to notice you of important information"
+  auto_join: true
 ```
 ---
 ### `enable_room_list_search`
@@ -3797,62 +3879,163 @@ enable_room_list_search: false
 ---
 ### `alias_creation_rules`
 
-The `alias_creation_rules` option controls who is allowed to create aliases
-on this server.
+The `alias_creation_rules` option allows server admins to prevent unwanted
+alias creation on this server.
 
-The format of this option is a list of rules that contain globs that
-match against user_id, room_id and the new alias (fully qualified with
-server name). The action in the first rule that matches is taken,
-which can currently either be "allow" or "deny".
+This setting is an optional list of 0 or more rules. By default, no list is
+provided, meaning that all alias creations are permitted.
 
-Missing user_id/room_id/alias fields default to "*".
+Otherwise, requests to create aliases are matched against each rule in order.
+The first rule that matches decides if the request is allowed or denied. If no
+rule matches, the request is denied. In particular, this means that configuring
+an empty list of rules will deny every alias creation request.
 
-If no rules match the request is denied. An empty list means no one
-can create aliases.
+Each rule is a YAML object containing four fields, each of which is an optional string:
 
-Options for the rules include:
-* `user_id`: Matches against the creator of the alias. Defaults to "*".
-* `alias`: Matches against the alias being created. Defaults to "*".
-* `room_id`: Matches against the room ID the alias is being pointed at. Defaults to "*"
-* `action`: Whether to "allow" or "deny" the request if the rule matches. Defaults to allow.
+* `user_id`: a glob pattern that matches against the creator of the alias.
+* `alias`: a glob pattern that matches against the alias being created.
+* `room_id`: a glob pattern that matches against the room ID the alias is being pointed at.
+* `action`: either `allow` or `deny`. What to do with the request if the rule matches. Defaults to `allow`.
+
+Each of the glob patterns is optional, defaulting to `*` ("match anything").
+Note that the patterns match against fully qualified IDs, e.g. against
+`@alice:example.com`, `#room:example.com` and `!abcdefghijk:example.com` instead
+of `alice`, `room` and `abcedgghijk`.
 
 Example configuration:
+
 ```yaml
+# No rule list specified. All alias creations are allowed.
+# This is the default behaviour.
 alias_creation_rules:
-  - user_id: "bad_user"
-    alias: "spammy_alias"
-    room_id: "*"
-    action: deny
 ```
+
+```yaml
+# A list of one rule which allows everything.
+# This has the same effect as the previous example.
+alias_creation_rules:
+  - "action": "allow"
+```
+
+```yaml
+# An empty list of rules. All alias creations are denied.
+alias_creation_rules: []
+```
+
+```yaml
+# A list of one rule which denies everything.
+# This has the same effect as the previous example.
+alias_creation_rules:
+  - "action": "deny"
+```
+
+```yaml
+# Prevent a specific user from creating aliases.
+# Allow other users to create any alias
+alias_creation_rules:
+  - user_id: "@bad_user:example.com"
+    action: deny
+
+  - action: allow
+```
+
+```yaml
+# Prevent aliases being created which point to a specific room.
+alias_creation_rules:
+  - room_id: "!forbiddenRoom:example.com"
+    action: deny
+
+  - action: allow
+```
+
 ---
 ### `room_list_publication_rules`
 
-The `room_list_publication_rules` option controls who can publish and
-which rooms can be published in the public room list.
+The `room_list_publication_rules` option allows server admins to prevent
+unwanted entries from being published in the public room list.
 
 The format of this option is the same as that for
-`alias_creation_rules`.
+[`alias_creation_rules`](#alias_creation_rules): an optional list of 0 or more
+rules. By default, no list is provided, meaning that all rooms may be
+published to the room list.
 
-If the room has one or more aliases associated with it, only one of
-the aliases needs to match the alias rule. If there are no aliases
-then only rules with `alias: *` match.
+Otherwise, requests to publish a room are matched against each rule in order.
+The first rule that matches decides if the request is allowed or denied. If no
+rule matches, the request is denied. In particular, this means that configuring
+an empty list of rules will deny every alias creation request.
 
-If no rules match the request is denied. An empty list means no one
-can publish rooms.
+Requests to create a public (public as in published to the room directory) room which violates
+the configured rules will result in the room being created but not published to the room directory.
 
-Options for the rules include:
-* `user_id`: Matches against the creator of the alias. Defaults to "*".
-* `alias`: Matches against any current local or canonical aliases associated with the room. Defaults to "*".
-* `room_id`: Matches against the room ID being published. Defaults to "*".
-* `action`: Whether to "allow" or "deny" the request if the rule matches. Defaults to allow.
+Each rule is a YAML object containing four fields, each of which is an optional string:
+
+* `user_id`: a glob pattern that matches against the user publishing the room.
+* `alias`: a glob pattern that matches against one of published room's aliases.
+  - If the room has no aliases, the alias match fails unless `alias` is unspecified or `*`.
+  - If the room has exactly one alias, the alias match succeeds if the `alias` pattern matches that alias.
+  - If the room has two or more aliases, the alias match succeeds if the pattern matches at least one of the aliases.
+* `room_id`: a glob pattern that matches against the room ID of the room being published.
+* `action`: either `allow` or `deny`. What to do with the request if the rule matches. Defaults to `allow`.
+
+Each of the glob patterns is optional, defaulting to `*` ("match anything").
+Note that the patterns match against fully qualified IDs, e.g. against
+`@alice:example.com`, `#room:example.com` and `!abcdefghijk:example.com` instead
+of `alice`, `room` and `abcedgghijk`.
+
 
 Example configuration:
+
 ```yaml
+# No rule list specified. Anyone may publish any room to the public list.
+# This is the default behaviour.
 room_list_publication_rules:
-  - user_id: "*"
-    alias: "*"
-    room_id: "*"
-    action: allow
+```
+
+```yaml
+# A list of one rule which allows everything.
+# This has the same effect as the previous example.
+room_list_publication_rules:
+  - "action": "allow"
+```
+
+```yaml
+# An empty list of rules. No-one may publish to the room list.
+room_list_publication_rules: []
+```
+
+```yaml
+# A list of one rule which denies everything.
+# This has the same effect as the previous example.
+room_list_publication_rules:
+  - "action": "deny"
+```
+
+```yaml
+# Prevent a specific user from publishing rooms.
+# Allow other users to publish anything.
+room_list_publication_rules:
+  - user_id: "@bad_user:example.com"
+    action: deny
+
+  - action: allow
+```
+
+```yaml
+# Prevent publication of a specific room.
+room_list_publication_rules:
+  - room_id: "!forbiddenRoom:example.com"
+    action: deny
+
+  - action: allow
+```
+
+```yaml
+# Prevent publication of rooms with at least one alias containing the word "potato".
+room_list_publication_rules:
+  - alias: "#*potato*:example.com"
+    action: deny
+
+  - action: allow
 ```
 
 ---
@@ -4076,9 +4259,9 @@ Example configuration(#2, for UNIX sockets):
 ```yaml
 instance_map:
   main:
-    path: /var/run/synapse/main_replication.sock
+    path: /run/synapse/main_replication.sock
   worker1:
-    path: /var/run/synapse/worker1_replication.sock
+    path: /run/synapse/worker1_replication.sock
 ```
 ---
 ### `stream_writers`
@@ -4114,6 +4297,9 @@ outbound_federation_restricted_to:
 Also see the [worker
 documentation](../../workers.md#restrict-outbound-federation-traffic-to-a-specific-set-of-workers)
 for more info.
+
+_Added in Synapse 1.89.0._
+
 ---
 ### `run_background_tasks_on`
 
@@ -4246,7 +4432,7 @@ must be declared, in the same way as the [`listeners` option](#listeners)
 in the shared config.
 
 Workers declared in [`stream_writers`](#stream_writers) and [`instance_map`](#instance_map)
- will need to include a `replication` listener here, in order to accept internal HTTP 
+ will need to include a `replication` listener here, in order to accept internal HTTP
 requests from other workers.
 
 Example configuration:
@@ -4261,13 +4447,13 @@ Example configuration(#2, using UNIX sockets with a `replication` listener):
 ```yaml
 worker_listeners:
   - type: http
-    path: /var/run/synapse/worker_public.sock
-    resources:
-      - names: [client, federation]
-  - type: http
-    path: /var/run/synapse/worker_replication.sock
+    path: /run/synapse/worker_replication.sock
     resources:
       - names: [replication]
+  - type: http
+    path: /run/synapse/worker_public.sock
+    resources:
+      - names: [client, federation]
 ```
 ---
 ### `worker_manhole`

@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   check_repo:
-    # Prevent this workflow from running on any fork of Synapse other than matrix-org/synapse, as it is
+    # Prevent this workflow from running on any fork of Synapse other than element-hq/synapse, as it is
     # only useful to the Synapse core team.
     # All other workflow steps depend on this one, thus if 'should_run_workflow' is not 'true', the rest
     # of the workflow will be skipped as well.
@@ -32,7 +32,7 @@ jobs:
       should_run_workflow: ${{ steps.check_condition.outputs.should_run_workflow }}
     steps:
       - id: check_condition
-        run: echo "should_run_workflow=${{ github.repository == 'matrix-org/synapse' }}" >> "$GITHUB_OUTPUT"
+        run: echo "should_run_workflow=${{ github.repository == 'element-hq/synapse' }}" >> "$GITHUB_OUTPUT"
 
   mypy:
     needs: check_repo
@@ -86,7 +86,7 @@ jobs:
             -e POSTGRES_PASSWORD=postgres \
             -e POSTGRES_INITDB_ARGS="--lc-collate C --lc-ctype C --encoding UTF8" \
             postgres:${{ matrix.postgres-version }}
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
       - run: pip install .[all,test]
@@ -164,7 +164,7 @@ jobs:
         if: ${{ always() }}
         run: /sytest/scripts/tap_to_gha.pl /logs/results.tap
       - name: Upload SyTest logs
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:
           name: Sytest Logs - ${{ job.status }} - (${{ join(matrix.*, ', ') }})
@@ -197,10 +197,13 @@ jobs:
         with:
           path: synapse
 
-      - uses: actions/setup-go@v4
-
       - name: Prepare Complement's Prerequisites
         run: synapse/.ci/scripts/setup_complement_prerequisites.sh
+
+      - uses: actions/setup-go@v5
+        with:
+          cache-dependency-path: complement/go.sum
+          go-version-file: complement/go.mod
 
       - run: |
           set -o pipefail
@@ -223,7 +226,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: JasonEtco/create-an-issue@e27dddc79c92bc6e4562f268fffa5ed752639abd # v2.9.1
+      - uses: JasonEtco/create-an-issue@1b14a70e4d8dc185e5cc76d3bec9eab20257b2c5 # v2.9.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:

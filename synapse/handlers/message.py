@@ -1,19 +1,24 @@
-# Copyright 2014-2016 OpenMarket Ltd
-# Copyright 2017-2018 New Vector Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2019-2020 The Matrix.org Foundation C.I.C.
-# Copyrignt 2020 Sorunome
+# Copyright 2014-2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import logging
 import random
 from http import HTTPStatus
@@ -29,6 +34,7 @@ from synapse.api.constants import (
     EventTypes,
     GuestAccess,
     HistoryVisibility,
+    JoinRules,
     Membership,
     RelationTypes,
     UserTypes,
@@ -244,7 +250,7 @@ class MessageHandler:
                 )
                 room_state = room_state_events[membership_event_id]
 
-        events = self._event_serializer.serialize_events(
+        events = await self._event_serializer.serialize_events(
             room_state.values(),
             self.clock.time_msec(),
             config=SerializeEventConfig(requester=requester),
@@ -693,13 +699,9 @@ class EventCreationHandler:
         if require_consent and not is_exempt:
             await self.assert_accepted_privacy_policy(requester)
 
-        # Save the access token ID, the device ID and the transaction ID in the event
-        # internal metadata. This is useful to determine if we should echo the
-        # transaction_id in events.
+        # Save the the device ID and the transaction ID in the event internal metadata.
+        # This is useful to determine if we should echo the transaction_id in events.
         # See `synapse.events.utils.EventClientSerializer.serialize_event`
-        if requester.access_token_id is not None:
-            builder.internal_metadata.token_id = requester.access_token_id
-
         if requester.device_id is not None:
             builder.internal_metadata.device_id = requester.device_id
 
@@ -999,7 +1001,26 @@ class EventCreationHandler:
             raise ShadowBanError()
 
         if ratelimit:
-            await self.request_ratelimiter.ratelimit(requester, update=False)
+            room_id = event_dict["room_id"]
+            try:
+                room_version = await self.store.get_room_version(room_id)
+            except NotFoundError:
+                # The room doesn't exist.
+                raise AuthError(403, f"User {requester.user} not in room {room_id}")
+
+            if room_version.updated_redaction_rules:
+                redacts = event_dict["content"].get("redacts")
+            else:
+                redacts = event_dict.get("redacts")
+
+            is_admin_redaction = await self.is_admin_redaction(
+                event_type=event_dict["type"],
+                sender=event_dict["sender"],
+                redacts=redacts,
+            )
+            await self.request_ratelimiter.ratelimit(
+                requester, is_admin_redaction=is_admin_redaction, update=False
+            )
 
         # We limit the number of concurrent event sends in a room so that we
         # don't fork the DAG too much. If we don't limit then we can end up in
@@ -1133,7 +1154,6 @@ class EventCreationHandler:
                 # in the meantime and context needs to be recomputed, so let's do so.
                 if i == max_retries - 1:
                     raise e
-                pass
 
         # we know it was persisted, so must have a stream ordering
         assert ev.internal_metadata.stream_ordering
@@ -1306,6 +1326,18 @@ class EventCreationHandler:
 
         self.validator.validate_new(event, self.config)
         await self._validate_event_relation(event)
+
+        if event.type == EventTypes.CallInvite:
+            room_id = event.room_id
+            room_info = await self.store.get_room_with_stats(room_id)
+            assert room_info is not None
+
+            if room_info.join_rules == JoinRules.PUBLIC:
+                raise SynapseError(
+                    403,
+                    "Call invites are not allowed in public rooms.",
+                    Codes.FORBIDDEN,
+                )
         logger.debug("Created event %s", event.event_id)
 
         return event, context
@@ -1509,6 +1541,18 @@ class EventCreationHandler:
                 first_event.room_id
             )
             if writer_instance != self._instance_name:
+                # Ratelimit before sending to the other event persister, to
+                # ensure that we correctly have ratelimits on both the event
+                # creators and event persisters.
+                if ratelimit:
+                    for event, _ in events_and_context:
+                        is_admin_redaction = await self.is_admin_redaction(
+                            event.type, event.sender, event.redacts
+                        )
+                        await self.request_ratelimiter.ratelimit(
+                            requester, is_admin_redaction=is_admin_redaction
+                        )
+
                 try:
                     result = await self.send_events(
                         instance_name=writer_instance,
@@ -1539,6 +1583,7 @@ class EventCreationHandler:
                     # stream_ordering entry manually (as it was persisted on
                     # another worker).
                     event.internal_metadata.stream_ordering = stream_id
+
                 return event
 
             event = await self.persist_and_notify_client_events(
@@ -1622,9 +1667,9 @@ class EventCreationHandler:
                     expiry_ms=60 * 60 * 1000,
                 )
 
-                self._external_cache_joined_hosts_updates[
-                    state_entry.state_group
-                ] = None
+                self._external_cache_joined_hosts_updates[state_entry.state_group] = (
+                    None
+                )
 
     async def _validate_canonical_alias(
         self,
@@ -1697,21 +1742,9 @@ class EventCreationHandler:
                 # can apply different ratelimiting. We do this by simply checking
                 # it's not a self-redaction (to avoid having to look up whether the
                 # user is actually admin or not).
-                is_admin_redaction = False
-                if event.type == EventTypes.Redaction:
-                    assert event.redacts is not None
-
-                    original_event = await self.store.get_event(
-                        event.redacts,
-                        redact_behaviour=EventRedactBehaviour.as_is,
-                        get_prev_content=False,
-                        allow_rejected=False,
-                        allow_none=True,
-                    )
-
-                    is_admin_redaction = bool(
-                        original_event and event.sender != original_event.sender
-                    )
+                is_admin_redaction = await self.is_admin_redaction(
+                    event.type, event.sender, event.redacts
+                )
 
                 await self.request_ratelimiter.ratelimit(
                     requester, is_admin_redaction=is_admin_redaction
@@ -1931,6 +1964,27 @@ class EventCreationHandler:
 
         return persisted_events[-1]
 
+    async def is_admin_redaction(
+        self, event_type: str, sender: str, redacts: Optional[str]
+    ) -> bool:
+        """Return whether the event is a redaction made by an admin, and thus
+        should use a different ratelimiter.
+        """
+        if event_type != EventTypes.Redaction:
+            return False
+
+        assert redacts is not None
+
+        original_event = await self.store.get_event(
+            redacts,
+            redact_behaviour=EventRedactBehaviour.as_is,
+            get_prev_content=False,
+            allow_rejected=False,
+            allow_none=True,
+        )
+
+        return bool(original_event and sender != original_event.sender)
+
     async def _maybe_kick_guest_users(
         self, event: EventBase, context: EventContext
     ) -> None:
@@ -2038,7 +2092,6 @@ class EventCreationHandler:
                         # in the meantime and context needs to be recomputed, so let's do so.
                         if i == max_retries - 1:
                             raise e
-                        pass
                 return True
             except AuthError:
                 logger.info(

@@ -1,16 +1,27 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2019 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
+from unittest import mock
+
+from synapse.notifier import Notifier
+from synapse.replication.tcp.handler import ReplicationCommandHandler
 from synapse.util.retryutils import NotRetryingDestination, get_retry_limiter
 
 from tests.unittest import HomeserverTestCase
@@ -108,6 +119,77 @@ class RetryLimiterTestCase(HomeserverTestCase):
 
         new_timings = self.get_success(store.get_destination_retry_timings("test_dest"))
         self.assertIsNone(new_timings)
+
+    def test_notifier_replication(self) -> None:
+        """Ensure the notifier/replication client is called only when expected."""
+        store = self.hs.get_datastores().main
+
+        notifier = mock.Mock(spec=Notifier)
+        replication_client = mock.Mock(spec=ReplicationCommandHandler)
+
+        limiter = self.get_success(
+            get_retry_limiter(
+                "test_dest",
+                self.clock,
+                store,
+                notifier=notifier,
+                replication_client=replication_client,
+            )
+        )
+
+        # The server is already up, nothing should occur.
+        self.pump(1)
+        with limiter:
+            pass
+        self.pump()
+
+        new_timings = self.get_success(store.get_destination_retry_timings("test_dest"))
+        self.assertIsNone(new_timings)
+        notifier.notify_remote_server_up.assert_not_called()
+        replication_client.send_remote_server_up.assert_not_called()
+
+        # Attempt again, but return an error. This will cause new retry timings, but
+        # should not trigger server up notifications.
+        self.pump(1)
+        try:
+            with limiter:
+                raise AssertionError("argh")
+        except AssertionError:
+            pass
+        self.pump()
+
+        new_timings = self.get_success(store.get_destination_retry_timings("test_dest"))
+        # The exact retry timings are tested separately.
+        self.assertIsNotNone(new_timings)
+        notifier.notify_remote_server_up.assert_not_called()
+        replication_client.send_remote_server_up.assert_not_called()
+
+        # A second failing request should be treated as the above.
+        self.pump(1)
+        try:
+            with limiter:
+                raise AssertionError("argh")
+        except AssertionError:
+            pass
+        self.pump()
+
+        new_timings = self.get_success(store.get_destination_retry_timings("test_dest"))
+        # The exact retry timings are tested separately.
+        self.assertIsNotNone(new_timings)
+        notifier.notify_remote_server_up.assert_not_called()
+        replication_client.send_remote_server_up.assert_not_called()
+
+        # A final successful attempt should generate a server up notification.
+        self.pump(1)
+        with limiter:
+            pass
+        self.pump()
+
+        new_timings = self.get_success(store.get_destination_retry_timings("test_dest"))
+        # The exact retry timings are tested separately.
+        self.assertIsNone(new_timings)
+        notifier.notify_remote_server_up.assert_called_once_with("test_dest")
+        replication_client.send_remote_server_up.assert_called_once_with("test_dest")
 
     def test_max_retry_interval(self) -> None:
         """Test that `destination_max_retry_interval` setting works as expected"""

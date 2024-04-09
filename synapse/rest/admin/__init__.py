@@ -1,6 +1,24 @@
-# Copyright 2014-2016 OpenMarket Ltd
-# Copyright 2018-2019 New Vector Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2020, 2021 The Matrix.org Foundation C.I.C.
+# Copyright 2014-2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
+#
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -88,8 +106,10 @@ from synapse.rest.admin.users import (
     UserByThreePid,
     UserMembershipRestServlet,
     UserRegisterServlet,
+    UserReplaceMasterCrossSigningKeyRestServlet,
     UserRestServletV2,
     UsersRestServletV2,
+    UsersRestServletV3,
     UserTokenRestServlet,
     WhoisRestServlet,
 )
@@ -146,7 +166,7 @@ class PurgeHistoryRestServlet(RestServlet):
             # RoomStreamToken expects [int] not Optional[int]
             assert event.internal_metadata.stream_ordering is not None
             room_token = RoomStreamToken(
-                event.depth, event.internal_metadata.stream_ordering
+                topological=event.depth, stream=event.internal_metadata.stream_ordering
             )
             token = await room_token.to_string(self.store)
 
@@ -217,10 +237,12 @@ class PurgeHistoryStatusRestServlet(RestServlet):
             raise NotFoundError("purge id '%s' not found" % purge_id)
 
         result: JsonDict = {
-            "status": purge_task.status
-            if purge_task.status == TaskStatus.COMPLETE
-            or purge_task.status == TaskStatus.FAILED
-            else "active",
+            "status": (
+                purge_task.status
+                if purge_task.status == TaskStatus.COMPLETE
+                or purge_task.status == TaskStatus.FAILED
+                else "active"
+            ),
         }
         if purge_task.error:
             result["error"] = purge_task.error
@@ -270,6 +292,7 @@ def register_servlets(hs: "HomeServer", http_server: HttpServer) -> None:
         UserTokenRestServlet(hs).register(http_server)
     UserRestServletV2(hs).register(http_server)
     UsersRestServletV2(hs).register(http_server)
+    UsersRestServletV3(hs).register(http_server)
     UserMediaStatisticsRestServlet(hs).register(http_server)
     LargestRoomsStatistics(hs).register(http_server)
     EventReportDetailRestServlet(hs).register(http_server)
@@ -292,6 +315,7 @@ def register_servlets(hs: "HomeServer", http_server: HttpServer) -> None:
     ListDestinationsRestServlet(hs).register(http_server)
     RoomMessagesRestServlet(hs).register(http_server)
     RoomTimestampToEventRestServlet(hs).register(http_server)
+    UserReplaceMasterCrossSigningKeyRestServlet(hs).register(http_server)
     UserByExternalId(hs).register(http_server)
     UserByThreePid(hs).register(http_server)
 

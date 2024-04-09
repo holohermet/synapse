@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2014-2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 """ This module contains base REST classes for constructing REST servlets. """
 import enum
@@ -54,20 +61,17 @@ logger = logging.getLogger(__name__)
 
 
 @overload
-def parse_integer(request: Request, name: str, default: int) -> int:
-    ...
+def parse_integer(request: Request, name: str, default: int) -> int: ...
 
 
 @overload
-def parse_integer(request: Request, name: str, *, required: Literal[True]) -> int:
-    ...
+def parse_integer(request: Request, name: str, *, required: Literal[True]) -> int: ...
 
 
 @overload
 def parse_integer(
     request: Request, name: str, default: Optional[int] = None, required: bool = False
-) -> Optional[int]:
-    ...
+) -> Optional[int]: ...
 
 
 def parse_integer(
@@ -98,8 +102,7 @@ def parse_integer_from_args(
     args: Mapping[bytes, Sequence[bytes]],
     name: str,
     default: Optional[int] = None,
-) -> Optional[int]:
-    ...
+) -> Optional[int]: ...
 
 
 @overload
@@ -108,8 +111,7 @@ def parse_integer_from_args(
     name: str,
     *,
     required: Literal[True],
-) -> int:
-    ...
+) -> int: ...
 
 
 @overload
@@ -118,8 +120,7 @@ def parse_integer_from_args(
     name: str,
     default: Optional[int] = None,
     required: bool = False,
-) -> Optional[int]:
-    ...
+) -> Optional[int]: ...
 
 
 def parse_integer_from_args(
@@ -165,20 +166,17 @@ def parse_integer_from_args(
 
 
 @overload
-def parse_boolean(request: Request, name: str, default: bool) -> bool:
-    ...
+def parse_boolean(request: Request, name: str, default: bool) -> bool: ...
 
 
 @overload
-def parse_boolean(request: Request, name: str, *, required: Literal[True]) -> bool:
-    ...
+def parse_boolean(request: Request, name: str, *, required: Literal[True]) -> bool: ...
 
 
 @overload
 def parse_boolean(
     request: Request, name: str, default: Optional[bool] = None, required: bool = False
-) -> Optional[bool]:
-    ...
+) -> Optional[bool]: ...
 
 
 def parse_boolean(
@@ -209,8 +207,7 @@ def parse_boolean_from_args(
     args: Mapping[bytes, Sequence[bytes]],
     name: str,
     default: bool,
-) -> bool:
-    ...
+) -> bool: ...
 
 
 @overload
@@ -219,8 +216,7 @@ def parse_boolean_from_args(
     name: str,
     *,
     required: Literal[True],
-) -> bool:
-    ...
+) -> bool: ...
 
 
 @overload
@@ -229,8 +225,7 @@ def parse_boolean_from_args(
     name: str,
     default: Optional[bool] = None,
     required: bool = False,
-) -> Optional[bool]:
-    ...
+) -> Optional[bool]: ...
 
 
 def parse_boolean_from_args(
@@ -282,8 +277,7 @@ def parse_bytes_from_args(
     args: Mapping[bytes, Sequence[bytes]],
     name: str,
     default: Optional[bytes] = None,
-) -> Optional[bytes]:
-    ...
+) -> Optional[bytes]: ...
 
 
 @overload
@@ -293,8 +287,7 @@ def parse_bytes_from_args(
     default: Literal[None] = None,
     *,
     required: Literal[True],
-) -> bytes:
-    ...
+) -> bytes: ...
 
 
 @overload
@@ -303,8 +296,7 @@ def parse_bytes_from_args(
     name: str,
     default: Optional[bytes] = None,
     required: bool = False,
-) -> Optional[bytes]:
-    ...
+) -> Optional[bytes]: ...
 
 
 def parse_bytes_from_args(
@@ -348,8 +340,7 @@ def parse_string(
     *,
     allowed_values: Optional[StrCollection] = None,
     encoding: str = "ascii",
-) -> str:
-    ...
+) -> str: ...
 
 
 @overload
@@ -360,8 +351,7 @@ def parse_string(
     required: Literal[True],
     allowed_values: Optional[StrCollection] = None,
     encoding: str = "ascii",
-) -> str:
-    ...
+) -> str: ...
 
 
 @overload
@@ -373,8 +363,7 @@ def parse_string(
     required: bool = False,
     allowed_values: Optional[StrCollection] = None,
     encoding: str = "ascii",
-) -> Optional[str]:
-    ...
+) -> Optional[str]: ...
 
 
 def parse_string(
@@ -430,8 +419,7 @@ def parse_enum(
     name: str,
     E: Type[EnumT],
     default: EnumT,
-) -> EnumT:
-    ...
+) -> EnumT: ...
 
 
 @overload
@@ -441,8 +429,7 @@ def parse_enum(
     E: Type[EnumT],
     *,
     required: Literal[True],
-) -> EnumT:
-    ...
+) -> EnumT: ...
 
 
 def parse_enum(
@@ -519,8 +506,7 @@ def parse_strings_from_args(
     *,
     allowed_values: Optional[StrCollection] = None,
     encoding: str = "ascii",
-) -> Optional[List[str]]:
-    ...
+) -> Optional[List[str]]: ...
 
 
 @overload
@@ -531,8 +517,7 @@ def parse_strings_from_args(
     *,
     allowed_values: Optional[StrCollection] = None,
     encoding: str = "ascii",
-) -> List[str]:
-    ...
+) -> List[str]: ...
 
 
 @overload
@@ -543,8 +528,7 @@ def parse_strings_from_args(
     required: Literal[True],
     allowed_values: Optional[StrCollection] = None,
     encoding: str = "ascii",
-) -> List[str]:
-    ...
+) -> List[str]: ...
 
 
 @overload
@@ -556,8 +540,7 @@ def parse_strings_from_args(
     required: bool = False,
     allowed_values: Optional[StrCollection] = None,
     encoding: str = "ascii",
-) -> Optional[List[str]]:
-    ...
+) -> Optional[List[str]]: ...
 
 
 def parse_strings_from_args(
@@ -618,8 +601,7 @@ def parse_string_from_args(
     *,
     allowed_values: Optional[StrCollection] = None,
     encoding: str = "ascii",
-) -> Optional[str]:
-    ...
+) -> Optional[str]: ...
 
 
 @overload
@@ -631,8 +613,7 @@ def parse_string_from_args(
     required: Literal[True],
     allowed_values: Optional[StrCollection] = None,
     encoding: str = "ascii",
-) -> str:
-    ...
+) -> str: ...
 
 
 @overload
@@ -643,8 +624,7 @@ def parse_string_from_args(
     required: bool = False,
     allowed_values: Optional[StrCollection] = None,
     encoding: str = "ascii",
-) -> Optional[str]:
-    ...
+) -> Optional[str]: ...
 
 
 def parse_string_from_args(
@@ -697,22 +677,19 @@ def parse_string_from_args(
 
 
 @overload
-def parse_json_value_from_request(request: Request) -> JsonDict:
-    ...
+def parse_json_value_from_request(request: Request) -> JsonDict: ...
 
 
 @overload
 def parse_json_value_from_request(
     request: Request, allow_empty_body: Literal[False]
-) -> JsonDict:
-    ...
+) -> JsonDict: ...
 
 
 @overload
 def parse_json_value_from_request(
     request: Request, allow_empty_body: bool = False
-) -> Optional[JsonDict]:
-    ...
+) -> Optional[JsonDict]: ...
 
 
 def parse_json_value_from_request(
@@ -840,7 +817,6 @@ def assert_params_in_dict(body: JsonDict, required: StrCollection) -> None:
 
 
 class RestServlet:
-
     """A Synapse REST Servlet.
 
     An implementing class can either provide its own custom 'register' method,

@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2015, 2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import itertools
 import logging
@@ -374,13 +381,13 @@ class SearchHandler:
         serialize_options = SerializeEventConfig(requester=requester)
 
         for context in contexts.values():
-            context["events_before"] = self._event_serializer.serialize_events(
+            context["events_before"] = await self._event_serializer.serialize_events(
                 context["events_before"],
                 time_now,
                 bundle_aggregations=aggregations,
                 config=serialize_options,
             )
-            context["events_after"] = self._event_serializer.serialize_events(
+            context["events_after"] = await self._event_serializer.serialize_events(
                 context["events_after"],
                 time_now,
                 bundle_aggregations=aggregations,
@@ -390,7 +397,7 @@ class SearchHandler:
         results = [
             {
                 "rank": search_result.rank_map[e.event_id],
-                "result": self._event_serializer.serialize_event(
+                "result": await self._event_serializer.serialize_event(
                     e,
                     time_now,
                     bundle_aggregations=aggregations,
@@ -409,7 +416,7 @@ class SearchHandler:
 
         if state_results:
             rooms_cat_res["state"] = {
-                room_id: self._event_serializer.serialize_events(
+                room_id: await self._event_serializer.serialize_events(
                     state_events, time_now, config=serialize_options
                 )
                 for room_id, state_events in state_results.items()

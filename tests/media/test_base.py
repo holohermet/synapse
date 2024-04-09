@@ -1,16 +1,22 @@
-# Copyright 2019 New Vector Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This file is licensed under the Affero General Public License (AGPL) version 3.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
+#
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 from unittest.mock import Mock
 
@@ -42,18 +48,35 @@ class GetFileNameFromHeadersTests(unittest.TestCase):
 
 class AddFileHeadersTests(unittest.TestCase):
     TEST_CASES = {
+        # Safe values use inline.
         "text/plain": b"inline; filename=file.name",
         "text/csv": b"inline; filename=file.name",
         "image/png": b"inline; filename=file.name",
+        # Unlisted values are set to attachment.
         "text/html": b"attachment; filename=file.name",
         "any/thing": b"attachment; filename=file.name",
+        # Parameters get ignored.
+        "text/plain; charset=utf-8": b"inline; filename=file.name",
+        "text/markdown; charset=utf-8; variant=CommonMark": b"attachment; filename=file.name",
+        # Parsed as lowercase.
+        "Text/Plain": b"inline; filename=file.name",
+        # Bad values don't choke.
+        "": b"attachment; filename=file.name",
+        ";": b"attachment; filename=file.name",
     }
 
     def test_content_disposition(self) -> None:
         for media_type, expected in self.TEST_CASES.items():
             request = Mock()
             add_file_headers(request, media_type, 0, "file.name")
-            request.setHeader.assert_any_call(b"Content-Disposition", expected)
+            # There should be a single call to set Content-Disposition.
+            for call in request.setHeader.call_args_list:
+                args, _ = call
+                if args[0] == b"Content-Disposition":
+                    break
+            else:
+                self.fail(f"No Content-Disposition header found for {media_type}")
+            self.assertEqual(args[1], expected, media_type)
 
     def test_no_filename(self) -> None:
         request = Mock()

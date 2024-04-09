@@ -1,17 +1,23 @@
-# Copyright 2017 New Vector Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2020 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import email.utils
 import logging
 from typing import (
@@ -23,6 +29,7 @@ from typing import (
     Generator,
     Iterable,
     List,
+    Mapping,
     Optional,
     Tuple,
     TypeVar,
@@ -39,6 +46,7 @@ from twisted.web.resource import Resource
 
 from synapse.api import errors
 from synapse.api.errors import SynapseError
+from synapse.api.presence import UserPresenceState
 from synapse.config import ConfigError
 from synapse.events import EventBase
 from synapse.events.presence_router import (
@@ -46,6 +54,7 @@ from synapse.events.presence_router import (
     GET_USERS_FOR_STATES_CALLBACK,
     PresenceRouter,
 )
+from synapse.events.utils import ADD_EXTRA_FIELDS_TO_UNSIGNED_CLIENT_EVENT_CALLBACK
 from synapse.handlers.account_data import ON_ACCOUNT_DATA_UPDATED_CALLBACK
 from synapse.handlers.auth import (
     CHECK_3PID_AUTH_CALLBACK,
@@ -77,6 +86,7 @@ from synapse.module_api.callbacks.account_validity_callbacks import (
     ON_LEGACY_ADMIN_REQUEST,
     ON_LEGACY_RENEW_CALLBACK,
     ON_LEGACY_SEND_MAIL_CALLBACK,
+    ON_USER_LOGIN_CALLBACK,
     ON_USER_REGISTRATION_CALLBACK,
 )
 from synapse.module_api.callbacks.spamchecker_callbacks import (
@@ -257,6 +267,7 @@ class ModuleApi:
         self.custom_template_dir = hs.config.server.custom_template_directory
         self._callbacks = hs.get_module_api_callbacks()
         self.msc3861_oauth_delegation_enabled = hs.config.experimental.msc3861.enabled
+        self._event_serializer = hs.get_event_client_serializer()
 
         try:
             app_name = self._hs.config.email.email_app_name
@@ -330,6 +341,7 @@ class ModuleApi:
         *,
         is_user_expired: Optional[IS_USER_EXPIRED_CALLBACK] = None,
         on_user_registration: Optional[ON_USER_REGISTRATION_CALLBACK] = None,
+        on_user_login: Optional[ON_USER_LOGIN_CALLBACK] = None,
         on_legacy_send_mail: Optional[ON_LEGACY_SEND_MAIL_CALLBACK] = None,
         on_legacy_renew: Optional[ON_LEGACY_RENEW_CALLBACK] = None,
         on_legacy_admin_request: Optional[ON_LEGACY_ADMIN_REQUEST] = None,
@@ -341,6 +353,7 @@ class ModuleApi:
         return self._callbacks.account_validity.register_callbacks(
             is_user_expired=is_user_expired,
             on_user_registration=on_user_registration,
+            on_user_login=on_user_login,
             on_legacy_send_mail=on_legacy_send_mail,
             on_legacy_renew=on_legacy_renew,
             on_legacy_admin_request=on_legacy_admin_request,
@@ -487,6 +500,25 @@ class ModuleApi:
             resource: The resource to attach to this path.
         """
         self._hs.register_module_web_resource(path, resource)
+
+    def register_add_extra_fields_to_unsigned_client_event_callbacks(
+        self,
+        *,
+        add_field_to_unsigned_callback: Optional[
+            ADD_EXTRA_FIELDS_TO_UNSIGNED_CLIENT_EVENT_CALLBACK
+        ] = None,
+    ) -> None:
+        """Registers a callback that can be used to add fields to the unsigned
+        section of events.
+
+        The callback is called every time an event is sent down to a client.
+
+        Added in Synapse 1.96.0
+        """
+        if add_field_to_unsigned_callback is not None:
+            self._event_serializer.register_add_extra_fields_to_unsigned_client_event_callback(
+                add_field_to_unsigned_callback
+            )
 
     #########################################################################
     # The following methods can be called by the module at any point in time.
@@ -678,7 +710,7 @@ class ModuleApi:
             "msisdn" for phone numbers, and an "address" key which value is the
             threepid's address.
         """
-        return await self._store.user_get_threepids(user_id)
+        return [attr.asdict(t) for t in await self._store.user_get_threepids(user_id)]
 
     def check_user_exists(self, user_id: str) -> "defer.Deferred[Optional[str]]":
         """Check if user exists.
@@ -1184,6 +1216,37 @@ class ModuleApi:
                 presence_events, [destination]
             )
 
+    async def set_presence_for_users(
+        self, users: Mapping[str, Tuple[str, Optional[str]]]
+    ) -> None:
+        """
+        Update the internal presence state of users.
+
+        This can be used for either local or remote users.
+
+        Note that this method can only be run on the process that is configured to write to the
+        presence stream. By default, this is the main process.
+
+        Added in Synapse v1.96.0.
+        """
+
+        # We pull out the presence handler here to break a cyclic
+        # dependency between the presence router and module API.
+        presence_handler = self._hs.get_presence_handler()
+
+        from synapse.handlers.presence import PresenceHandler
+
+        assert isinstance(presence_handler, PresenceHandler)
+
+        states = await presence_handler.current_state_for_users(users.keys())
+        for user_id, (state, status_msg) in users.items():
+            prev_state = states.setdefault(user_id, UserPresenceState.default(user_id))
+            states[user_id] = prev_state.copy_and_replace(
+                state=state, status_msg=status_msg
+            )
+
+        await presence_handler._update_states(states.values(), force_notify=True)
+
     def looping_background_call(
         self,
         f: Callable,
@@ -1207,7 +1270,7 @@ class ModuleApi:
             f: The function to call repeatedly. f can be either synchronous or
                 asynchronous, and must follow Synapse's logcontext rules.
                 More info about logcontexts is available at
-                https://matrix-org.github.io/synapse/latest/log_contexts.html
+                https://element-hq.github.io/synapse/latest/log_contexts.html
             msec: How long to wait between calls in milliseconds.
             *args: Positional arguments to pass to function.
             desc: The background task's description. Default to the function's name.
@@ -1263,7 +1326,7 @@ class ModuleApi:
             f: The function to call once. f can be either synchronous or
                 asynchronous, and must follow Synapse's logcontext rules.
                 More info about logcontexts is available at
-                https://matrix-org.github.io/synapse/latest/log_contexts.html
+                https://element-hq.github.io/synapse/latest/log_contexts.html
             *args: Positional arguments to pass to function.
             desc: The background task's description. Default to the function's name.
             **kwargs: Keyword arguments to pass to function.
@@ -1806,7 +1869,8 @@ class PublicRoomListManager:
         if not room:
             return False
 
-        return room.get("is_public", False)
+        # The first item is whether the room is public.
+        return room[0]
 
     async def add_room_to_public_room_list(self, room_id: str) -> None:
         """Publishes a room to the public room list.

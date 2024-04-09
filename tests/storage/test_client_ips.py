@@ -1,19 +1,25 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2016 OpenMarket Ltd
-# Copyright 2018 New Vector Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple, cast
 from unittest.mock import AsyncMock
 
 from parameterized import parameterized
@@ -24,7 +30,10 @@ import synapse.rest.admin
 from synapse.http.site import XForwardedForRequest
 from synapse.rest.client import login
 from synapse.server import HomeServer
-from synapse.storage.databases.main.client_ips import LAST_SEEN_GRANULARITY
+from synapse.storage.databases.main.client_ips import (
+    LAST_SEEN_GRANULARITY,
+    DeviceLastConnectionInfo,
+)
 from synapse.types import UserID
 from synapse.util import Clock
 
@@ -65,15 +74,15 @@ class ClientIpStoreTestCase(unittest.HomeserverTestCase):
         )
 
         r = result[(user_id, device_id)]
-        self.assertLessEqual(
-            {
-                "user_id": user_id,
-                "device_id": device_id,
-                "ip": "ip",
-                "user_agent": "user_agent",
-                "last_seen": 12345678000,
-            }.items(),
-            r.items(),
+        self.assertEqual(
+            DeviceLastConnectionInfo(
+                user_id=user_id,
+                device_id=device_id,
+                ip="ip",
+                user_agent="user_agent",
+                last_seen=12345678000,
+            ),
+            r,
         )
 
     def test_insert_new_client_ip_none_device_id(self) -> None:
@@ -94,26 +103,26 @@ class ClientIpStoreTestCase(unittest.HomeserverTestCase):
         self.reactor.advance(200)
         self.pump(0)
 
-        result = self.get_success(
-            self.store.db_pool.simple_select_list(
-                table="user_ips",
-                keyvalues={"user_id": user_id},
-                retcols=["access_token", "ip", "user_agent", "device_id", "last_seen"],
-                desc="get_user_ip_and_agents",
-            )
+        result = cast(
+            List[Tuple[str, str, str, Optional[str], int]],
+            self.get_success(
+                self.store.db_pool.simple_select_list(
+                    table="user_ips",
+                    keyvalues={"user_id": user_id},
+                    retcols=[
+                        "access_token",
+                        "ip",
+                        "user_agent",
+                        "device_id",
+                        "last_seen",
+                    ],
+                    desc="get_user_ip_and_agents",
+                )
+            ),
         )
 
         self.assertEqual(
-            result,
-            [
-                {
-                    "access_token": "access_token",
-                    "ip": "ip",
-                    "user_agent": "user_agent",
-                    "device_id": None,
-                    "last_seen": 12345678000,
-                }
-            ],
+            result, [("access_token", "ip", "user_agent", None, 12345678000)]
         )
 
         # Add another & trigger the storage loop
@@ -125,26 +134,26 @@ class ClientIpStoreTestCase(unittest.HomeserverTestCase):
         self.reactor.advance(10)
         self.pump(0)
 
-        result = self.get_success(
-            self.store.db_pool.simple_select_list(
-                table="user_ips",
-                keyvalues={"user_id": user_id},
-                retcols=["access_token", "ip", "user_agent", "device_id", "last_seen"],
-                desc="get_user_ip_and_agents",
-            )
+        result = cast(
+            List[Tuple[str, str, str, Optional[str], int]],
+            self.get_success(
+                self.store.db_pool.simple_select_list(
+                    table="user_ips",
+                    keyvalues={"user_id": user_id},
+                    retcols=[
+                        "access_token",
+                        "ip",
+                        "user_agent",
+                        "device_id",
+                        "last_seen",
+                    ],
+                    desc="get_user_ip_and_agents",
+                )
+            ),
         )
         # Only one result, has been upserted.
         self.assertEqual(
-            result,
-            [
-                {
-                    "access_token": "access_token",
-                    "ip": "ip",
-                    "user_agent": "user_agent",
-                    "device_id": None,
-                    "last_seen": 12345878000,
-                }
-            ],
+            result, [("access_token", "ip", "user_agent", None, 12345878000)]
         )
 
     @parameterized.expand([(False,), (True,)])
@@ -174,25 +183,23 @@ class ClientIpStoreTestCase(unittest.HomeserverTestCase):
             self.reactor.advance(10)
         else:
             # Check that the new IP and user agent has not been stored yet
-            db_result = self.get_success(
-                self.store.db_pool.simple_select_list(
-                    table="devices",
-                    keyvalues={},
-                    retcols=("user_id", "ip", "user_agent", "device_id", "last_seen"),
+            db_result = cast(
+                List[Tuple[str, Optional[str], Optional[str], str, Optional[int]]],
+                self.get_success(
+                    self.store.db_pool.simple_select_list(
+                        table="devices",
+                        keyvalues={},
+                        retcols=(
+                            "user_id",
+                            "ip",
+                            "user_agent",
+                            "device_id",
+                            "last_seen",
+                        ),
+                    ),
                 ),
             )
-            self.assertEqual(
-                db_result,
-                [
-                    {
-                        "user_id": user_id,
-                        "device_id": device_id,
-                        "ip": None,
-                        "user_agent": None,
-                        "last_seen": None,
-                    },
-                ],
-            )
+            self.assertEqual(db_result, [(user_id, None, None, device_id, None)])
 
         result = self.get_success(
             self.store.get_last_client_ip_by_device(user_id, device_id)
@@ -201,13 +208,13 @@ class ClientIpStoreTestCase(unittest.HomeserverTestCase):
         self.assertEqual(
             result,
             {
-                (user_id, device_id): {
-                    "user_id": user_id,
-                    "device_id": device_id,
-                    "ip": "ip",
-                    "user_agent": "user_agent",
-                    "last_seen": 12345678000,
-                },
+                (user_id, device_id): DeviceLastConnectionInfo(
+                    user_id=user_id,
+                    device_id=device_id,
+                    ip="ip",
+                    user_agent="user_agent",
+                    last_seen=12345678000,
+                ),
             },
         )
 
@@ -258,30 +265,21 @@ class ClientIpStoreTestCase(unittest.HomeserverTestCase):
         )
 
         # Check that the new IP and user agent has not been stored yet
-        db_result = self.get_success(
-            self.store.db_pool.simple_select_list(
-                table="devices",
-                keyvalues={},
-                retcols=("user_id", "ip", "user_agent", "device_id", "last_seen"),
+        db_result = cast(
+            List[Tuple[str, Optional[str], Optional[str], str, Optional[int]]],
+            self.get_success(
+                self.store.db_pool.simple_select_list(
+                    table="devices",
+                    keyvalues={},
+                    retcols=("user_id", "ip", "user_agent", "device_id", "last_seen"),
+                ),
             ),
         )
         self.assertCountEqual(
             db_result,
             [
-                {
-                    "user_id": user_id,
-                    "device_id": device_id_1,
-                    "ip": "ip_1",
-                    "user_agent": "user_agent_1",
-                    "last_seen": 12345678000,
-                },
-                {
-                    "user_id": user_id,
-                    "device_id": device_id_2,
-                    "ip": "ip_2",
-                    "user_agent": "user_agent_2",
-                    "last_seen": 12345678000,
-                },
+                (user_id, "ip_1", "user_agent_1", device_id_1, 12345678000),
+                (user_id, "ip_2", "user_agent_2", device_id_2, 12345678000),
             ],
         )
 
@@ -292,20 +290,20 @@ class ClientIpStoreTestCase(unittest.HomeserverTestCase):
         self.assertEqual(
             result,
             {
-                (user_id, device_id_1): {
-                    "user_id": user_id,
-                    "device_id": device_id_1,
-                    "ip": "ip_1",
-                    "user_agent": "user_agent_1",
-                    "last_seen": 12345678000,
-                },
-                (user_id, device_id_2): {
-                    "user_id": user_id,
-                    "device_id": device_id_2,
-                    "ip": "ip_2",
-                    "user_agent": "user_agent_3",
-                    "last_seen": 12345688000 + LAST_SEEN_GRANULARITY,
-                },
+                (user_id, device_id_1): DeviceLastConnectionInfo(
+                    user_id=user_id,
+                    device_id=device_id_1,
+                    ip="ip_1",
+                    user_agent="user_agent_1",
+                    last_seen=12345678000,
+                ),
+                (user_id, device_id_2): DeviceLastConnectionInfo(
+                    user_id=user_id,
+                    device_id=device_id_2,
+                    ip="ip_2",
+                    user_agent="user_agent_3",
+                    last_seen=12345688000 + LAST_SEEN_GRANULARITY,
+                ),
             },
         )
 
@@ -382,28 +380,21 @@ class ClientIpStoreTestCase(unittest.HomeserverTestCase):
         )
 
         # Check that the new IP and user agent has not been stored yet
-        db_result = self.get_success(
-            self.store.db_pool.simple_select_list(
-                table="user_ips",
-                keyvalues={},
-                retcols=("access_token", "ip", "user_agent", "last_seen"),
+        db_result = cast(
+            List[Tuple[str, str, str, int]],
+            self.get_success(
+                self.store.db_pool.simple_select_list(
+                    table="user_ips",
+                    keyvalues={},
+                    retcols=("access_token", "ip", "user_agent", "last_seen"),
+                ),
             ),
         )
         self.assertEqual(
             db_result,
             [
-                {
-                    "access_token": "access_token",
-                    "ip": "ip_1",
-                    "user_agent": "user_agent_1",
-                    "last_seen": 12345678000,
-                },
-                {
-                    "access_token": "access_token",
-                    "ip": "ip_2",
-                    "user_agent": "user_agent_2",
-                    "last_seen": 12345678000,
-                },
+                ("access_token", "ip_1", "user_agent_1", 12345678000),
+                ("access_token", "ip_2", "user_agent_2", 12345678000),
             ],
         )
 
@@ -526,15 +517,15 @@ class ClientIpStoreTestCase(unittest.HomeserverTestCase):
         )
 
         r = result[(user_id, device_id)]
-        self.assertLessEqual(
-            {
-                "user_id": user_id,
-                "device_id": device_id,
-                "ip": None,
-                "user_agent": None,
-                "last_seen": None,
-            }.items(),
-            r.items(),
+        self.assertEqual(
+            DeviceLastConnectionInfo(
+                user_id=user_id,
+                device_id=device_id,
+                ip=None,
+                user_agent=None,
+                last_seen=None,
+            ),
+            r,
         )
 
         # Register the background update to run again.
@@ -561,15 +552,15 @@ class ClientIpStoreTestCase(unittest.HomeserverTestCase):
         )
 
         r = result[(user_id, device_id)]
-        self.assertLessEqual(
-            {
-                "user_id": user_id,
-                "device_id": device_id,
-                "ip": "ip",
-                "user_agent": "user_agent",
-                "last_seen": 0,
-            }.items(),
-            r.items(),
+        self.assertEqual(
+            DeviceLastConnectionInfo(
+                user_id=user_id,
+                device_id=device_id,
+                ip="ip",
+                user_agent="user_agent",
+                last_seen=0,
+            ),
+            r,
         )
 
     def test_old_user_ips_pruned(self) -> None:
@@ -597,39 +588,49 @@ class ClientIpStoreTestCase(unittest.HomeserverTestCase):
         self.reactor.advance(200)
 
         # We should see that in the DB
-        result = self.get_success(
-            self.store.db_pool.simple_select_list(
-                table="user_ips",
-                keyvalues={"user_id": user_id},
-                retcols=["access_token", "ip", "user_agent", "device_id", "last_seen"],
-                desc="get_user_ip_and_agents",
-            )
+        result = cast(
+            List[Tuple[str, str, str, Optional[str], int]],
+            self.get_success(
+                self.store.db_pool.simple_select_list(
+                    table="user_ips",
+                    keyvalues={"user_id": user_id},
+                    retcols=[
+                        "access_token",
+                        "ip",
+                        "user_agent",
+                        "device_id",
+                        "last_seen",
+                    ],
+                    desc="get_user_ip_and_agents",
+                )
+            ),
         )
 
         self.assertEqual(
             result,
-            [
-                {
-                    "access_token": "access_token",
-                    "ip": "ip",
-                    "user_agent": "user_agent",
-                    "device_id": device_id,
-                    "last_seen": 0,
-                }
-            ],
+            [("access_token", "ip", "user_agent", device_id, 0)],
         )
 
         # Now advance by a couple of months
         self.reactor.advance(60 * 24 * 60 * 60)
 
         # We should get no results.
-        result = self.get_success(
-            self.store.db_pool.simple_select_list(
-                table="user_ips",
-                keyvalues={"user_id": user_id},
-                retcols=["access_token", "ip", "user_agent", "device_id", "last_seen"],
-                desc="get_user_ip_and_agents",
-            )
+        result = cast(
+            List[Tuple[str, str, str, Optional[str], int]],
+            self.get_success(
+                self.store.db_pool.simple_select_list(
+                    table="user_ips",
+                    keyvalues={"user_id": user_id},
+                    retcols=[
+                        "access_token",
+                        "ip",
+                        "user_agent",
+                        "device_id",
+                        "last_seen",
+                    ],
+                    desc="get_user_ip_and_agents",
+                )
+            ),
         )
 
         self.assertEqual(result, [])
@@ -640,15 +641,15 @@ class ClientIpStoreTestCase(unittest.HomeserverTestCase):
         )
 
         r = result2[(user_id, device_id)]
-        self.assertLessEqual(
-            {
-                "user_id": user_id,
-                "device_id": device_id,
-                "ip": "ip",
-                "user_agent": "user_agent",
-                "last_seen": 0,
-            }.items(),
-            r.items(),
+        self.assertEqual(
+            DeviceLastConnectionInfo(
+                user_id=user_id,
+                device_id=device_id,
+                ip="ip",
+                user_agent="user_agent",
+                last_seen=0,
+            ),
+            r,
         )
 
     def test_invalid_user_agents_are_ignored(self) -> None:
@@ -693,28 +694,26 @@ class ClientIpStoreTestCase(unittest.HomeserverTestCase):
         self.reactor.advance(200)
 
         # We should see that in the DB
-        result = self.get_success(
-            self.store.db_pool.simple_select_list(
-                table="user_ips",
-                keyvalues={},
-                retcols=["access_token", "ip", "user_agent", "device_id", "last_seen"],
-                desc="get_user_ip_and_agents",
-            )
+        result = cast(
+            List[Tuple[str, str, str, Optional[str], int]],
+            self.get_success(
+                self.store.db_pool.simple_select_list(
+                    table="user_ips",
+                    keyvalues={},
+                    retcols=[
+                        "access_token",
+                        "ip",
+                        "user_agent",
+                        "device_id",
+                        "last_seen",
+                    ],
+                    desc="get_user_ip_and_agents",
+                )
+            ),
         )
 
         # ensure user1 is filtered out
-        self.assertEqual(
-            result,
-            [
-                {
-                    "access_token": access_token2,
-                    "ip": "ip",
-                    "user_agent": "user_agent",
-                    "device_id": device_id2,
-                    "last_seen": 0,
-                }
-            ],
-        )
+        self.assertEqual(result, [(access_token2, "ip", "user_agent", device_id2, 0)])
 
 
 class ClientIpAuthTestCase(unittest.HomeserverTestCase):
@@ -777,13 +776,13 @@ class ClientIpAuthTestCase(unittest.HomeserverTestCase):
             self.store.get_last_client_ip_by_device(self.user_id, device_id)
         )
         r = result[(self.user_id, device_id)]
-        self.assertLessEqual(
-            {
-                "user_id": self.user_id,
-                "device_id": device_id,
-                "ip": expected_ip,
-                "user_agent": "Mozzila pizza",
-                "last_seen": 123456100,
-            }.items(),
-            r.items(),
+        self.assertEqual(
+            DeviceLastConnectionInfo(
+                user_id=self.user_id,
+                device_id=device_id,
+                ip=expected_ip,
+                user_agent="Mozzila pizza",
+                last_seen=123456100,
+            ),
+            r,
         )

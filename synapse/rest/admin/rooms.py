@@ -1,20 +1,29 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2019-2021 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import logging
 from http import HTTPStatus
 from typing import TYPE_CHECKING, List, Optional, Tuple, cast
 from urllib import parse as urlparse
+
+import attr
 
 from synapse.api.constants import Direction, EventTypes, JoinRules, Membership
 from synapse.api.errors import AuthError, Codes, NotFoundError, SynapseError
@@ -306,10 +315,13 @@ class RoomRestServlet(RestServlet):
             raise NotFoundError("Room not found")
 
         members = await self.store.get_users_in_room(room_id)
-        ret["joined_local_devices"] = await self.store.count_devices_by_users(members)
-        ret["forgotten"] = await self.store.is_locally_forgotten_room(room_id)
+        result = attr.asdict(ret)
+        result["joined_local_devices"] = await self.store.count_devices_by_users(
+            members
+        )
+        result["forgotten"] = await self.store.is_locally_forgotten_room(room_id)
 
-        return HTTPStatus.OK, ret
+        return HTTPStatus.OK, result
 
     async def on_DELETE(
         self, request: SynapseRequest, room_id: str
@@ -408,8 +420,8 @@ class RoomMembersRestServlet(RestServlet):
     ) -> Tuple[int, JsonDict]:
         await assert_requester_is_admin(self.auth, request)
 
-        ret = await self.store.get_room(room_id)
-        if not ret:
+        room = await self.store.get_room(room_id)
+        if not room:
             raise NotFoundError("Room not found")
 
         members = await self.store.get_users_in_room(room_id)
@@ -437,14 +449,14 @@ class RoomStateRestServlet(RestServlet):
     ) -> Tuple[int, JsonDict]:
         await assert_requester_is_admin(self.auth, request)
 
-        ret = await self.store.get_room(room_id)
-        if not ret:
+        room = await self.store.get_room(room_id)
+        if not room:
             raise NotFoundError("Room not found")
 
         event_ids = await self._storage_controllers.state.get_current_state_ids(room_id)
         events = await self.store.get_events(event_ids.values())
         now = self.clock.time_msec()
-        room_state = self._event_serializer.serialize_events(events.values(), now)
+        room_state = await self._event_serializer.serialize_events(events.values(), now)
         ret = {"state": room_state}
 
         return HTTPStatus.OK, ret
@@ -724,7 +736,17 @@ class ForwardExtremitiesRestServlet(ResolveRoomIdMixin, RestServlet):
         room_id, _ = await self.resolve_room_id(room_identifier)
 
         extremities = await self.store.get_forward_extremities_for_room(room_id)
-        return HTTPStatus.OK, {"count": len(extremities), "results": extremities}
+        result = [
+            {
+                "event_id": ex[0],
+                "state_group": ex[1],
+                "depth": ex[2],
+                "received_ts": ex[3],
+            }
+            for ex in extremities
+        ]
+
+        return HTTPStatus.OK, {"count": len(extremities), "results": result}
 
 
 class RoomEventContextServlet(RestServlet):
@@ -779,22 +801,22 @@ class RoomEventContextServlet(RestServlet):
 
         time_now = self.clock.time_msec()
         results = {
-            "events_before": self._event_serializer.serialize_events(
+            "events_before": await self._event_serializer.serialize_events(
                 event_context.events_before,
                 time_now,
                 bundle_aggregations=event_context.aggregations,
             ),
-            "event": self._event_serializer.serialize_event(
+            "event": await self._event_serializer.serialize_event(
                 event_context.event,
                 time_now,
                 bundle_aggregations=event_context.aggregations,
             ),
-            "events_after": self._event_serializer.serialize_events(
+            "events_after": await self._event_serializer.serialize_events(
                 event_context.events_after,
                 time_now,
                 bundle_aggregations=event_context.aggregations,
             ),
-            "state": self._event_serializer.serialize_events(
+            "state": await self._event_serializer.serialize_events(
                 event_context.state, time_now
             ),
             "start": event_context.start,

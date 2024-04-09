@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2014-2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 
 import json
@@ -28,7 +35,7 @@ from synapse.federation.transport.server import TransportLayerServer
 from synapse.handlers.typing import TypingWriterHandler
 from synapse.http.federation.matrix_federation_agent import MatrixFederationAgent
 from synapse.server import HomeServer
-from synapse.types import JsonDict, Requester, UserID, create_requester
+from synapse.types import JsonDict, Requester, StreamKeyType, UserID, create_requester
 from synapse.util import Clock
 
 from tests import unittest
@@ -174,7 +181,7 @@ class TypingNotificationsTestCase(unittest.HomeserverTestCase):
             return_value=1
         )
 
-        self.datastore.get_partial_current_state_deltas = Mock(return_value=(0, None))  # type: ignore[method-assign]
+        self.datastore.get_partial_current_state_deltas = Mock(return_value=(0, []))  # type: ignore[method-assign]
 
         self.datastore.get_to_device_stream_token = Mock(  # type: ignore[method-assign]
             return_value=0
@@ -203,7 +210,9 @@ class TypingNotificationsTestCase(unittest.HomeserverTestCase):
             )
         )
 
-        self.on_new_event.assert_has_calls([call("typing_key", 1, rooms=[ROOM_ID])])
+        self.on_new_event.assert_has_calls(
+            [call(StreamKeyType.TYPING, 1, rooms=[ROOM_ID])]
+        )
 
         self.assertEqual(self.event_source.get_current_key(), 1)
         events = self.get_success(
@@ -273,7 +282,9 @@ class TypingNotificationsTestCase(unittest.HomeserverTestCase):
         )
         self.assertEqual(channel.code, 200)
 
-        self.on_new_event.assert_has_calls([call("typing_key", 1, rooms=[ROOM_ID])])
+        self.on_new_event.assert_has_calls(
+            [call(StreamKeyType.TYPING, 1, rooms=[ROOM_ID])]
+        )
 
         self.assertEqual(self.event_source.get_current_key(), 1)
         events = self.get_success(
@@ -349,7 +360,9 @@ class TypingNotificationsTestCase(unittest.HomeserverTestCase):
             )
         )
 
-        self.on_new_event.assert_has_calls([call("typing_key", 1, rooms=[ROOM_ID])])
+        self.on_new_event.assert_has_calls(
+            [call(StreamKeyType.TYPING, 1, rooms=[ROOM_ID])]
+        )
 
         self.mock_federation_client.put_json.assert_called_once_with(
             "farm",
@@ -399,7 +412,9 @@ class TypingNotificationsTestCase(unittest.HomeserverTestCase):
             )
         )
 
-        self.on_new_event.assert_has_calls([call("typing_key", 1, rooms=[ROOM_ID])])
+        self.on_new_event.assert_has_calls(
+            [call(StreamKeyType.TYPING, 1, rooms=[ROOM_ID])]
+        )
         self.on_new_event.reset_mock()
 
         self.assertEqual(self.event_source.get_current_key(), 1)
@@ -425,7 +440,9 @@ class TypingNotificationsTestCase(unittest.HomeserverTestCase):
 
         self.reactor.pump([16])
 
-        self.on_new_event.assert_has_calls([call("typing_key", 2, rooms=[ROOM_ID])])
+        self.on_new_event.assert_has_calls(
+            [call(StreamKeyType.TYPING, 2, rooms=[ROOM_ID])]
+        )
 
         self.assertEqual(self.event_source.get_current_key(), 2)
         events = self.get_success(
@@ -459,7 +476,9 @@ class TypingNotificationsTestCase(unittest.HomeserverTestCase):
             )
         )
 
-        self.on_new_event.assert_has_calls([call("typing_key", 3, rooms=[ROOM_ID])])
+        self.on_new_event.assert_has_calls(
+            [call(StreamKeyType.TYPING, 3, rooms=[ROOM_ID])]
+        )
         self.on_new_event.reset_mock()
 
         self.assertEqual(self.event_source.get_current_key(), 3)

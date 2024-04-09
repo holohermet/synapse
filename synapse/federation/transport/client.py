@@ -1,23 +1,31 @@
-# Copyright 2014-2022 The Matrix.org Foundation C.I.C.
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2020 Sorunome
+# Copyright 2014-2022 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import logging
 import urllib
 from typing import (
     TYPE_CHECKING,
     Any,
+    BinaryIO,
     Callable,
     Collection,
     Dict,
@@ -431,7 +439,7 @@ class TransportLayerClient:
             The remote homeserver can optionally return some state from the room. The response
             dictionary is in the form:
 
-            {"knock_state_events": [<state event dict>, ...]}
+            {"knock_room_state": [<state event dict>, ...]}
 
             The list of state events may be empty.
         """
@@ -802,6 +810,58 @@ class TransportLayerClient:
 
         return await self.client.post_json(
             destination=destination, path=path, data={"user_ids": user_ids}
+        )
+
+    async def download_media_r0(
+        self,
+        destination: str,
+        media_id: str,
+        output_stream: BinaryIO,
+        max_size: int,
+        max_timeout_ms: int,
+    ) -> Tuple[int, Dict[bytes, List[bytes]]]:
+        path = f"/_matrix/media/r0/download/{destination}/{media_id}"
+
+        return await self.client.get_file(
+            destination,
+            path,
+            output_stream=output_stream,
+            max_size=max_size,
+            args={
+                # tell the remote server to 404 if it doesn't
+                # recognise the server_name, to make sure we don't
+                # end up with a routing loop.
+                "allow_remote": "false",
+                "timeout_ms": str(max_timeout_ms),
+            },
+        )
+
+    async def download_media_v3(
+        self,
+        destination: str,
+        media_id: str,
+        output_stream: BinaryIO,
+        max_size: int,
+        max_timeout_ms: int,
+    ) -> Tuple[int, Dict[bytes, List[bytes]]]:
+        path = f"/_matrix/media/v3/download/{destination}/{media_id}"
+
+        return await self.client.get_file(
+            destination,
+            path,
+            output_stream=output_stream,
+            max_size=max_size,
+            args={
+                # tell the remote server to 404 if it doesn't
+                # recognise the server_name, to make sure we don't
+                # end up with a routing loop.
+                "allow_remote": "false",
+                "timeout_ms": str(max_timeout_ms),
+                # Matrix 1.7 allows for this to redirect to another URL, this should
+                # just be ignored for an old homeserver, so always provide it.
+                "allow_redirect": "true",
+            },
+            follow_redirects=True,
         )
 
 

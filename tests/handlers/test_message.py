@@ -1,22 +1,30 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2020 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import logging
 from typing import Tuple
 
 from twisted.test.proto_helpers import MemoryReactor
 
 from synapse.api.constants import EventTypes
+from synapse.api.errors import SynapseError
 from synapse.events import EventBase
 from synapse.events.snapshot import EventContext, UnpersistedEventContextBase
 from synapse.rest import admin
@@ -44,11 +52,15 @@ class EventCreationTestCase(unittest.HomeserverTestCase):
         persistence = self.hs.get_storage_controllers().persistence
         assert persistence is not None
         self._persist_event_storage_controller = persistence
+        self.store = self.hs.get_datastores().main
 
         self.user_id = self.register_user("tester", "foobar")
         device_id = "dev-1"
         access_token = self.login("tester", "foobar", device_id=device_id)
         self.room_id = self.helper.create_room_as(self.user_id, tok=access_token)
+        self.private_room_id = self.helper.create_room_as(
+            self.user_id, tok=access_token, extra_content={"preset": "private_chat"}
+        )
 
         self.requester = create_requester(self.user_id, device_id=device_id)
 
@@ -276,6 +288,41 @@ class EventCreationTestCase(unittest.HomeserverTestCase):
                 allow_no_prev_events=True,
             ),
             AssertionError,
+        )
+
+    def test_call_invite_event_creation_fails_in_public_room(self) -> None:
+        # get prev_events for room
+        prev_events = self.get_success(
+            self.store.get_prev_events_for_room(self.room_id)
+        )
+
+        # the invite in a public room should fail
+        self.get_failure(
+            self.handler.create_event(
+                self.requester,
+                {
+                    "type": EventTypes.CallInvite,
+                    "room_id": self.room_id,
+                    "sender": self.requester.user.to_string(),
+                },
+                prev_event_ids=prev_events,
+                auth_event_ids=prev_events,
+            ),
+            SynapseError,
+        )
+
+        # but a call invite in a private room should succeed
+        self.get_success(
+            self.handler.create_event(
+                self.requester,
+                {
+                    "type": EventTypes.CallInvite,
+                    "room_id": self.private_room_id,
+                    "sender": self.requester.user.to_string(),
+                },
+                prev_event_ids=prev_events,
+                auth_event_ids=prev_events,
+            )
         )
 
 

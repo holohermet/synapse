@@ -1,18 +1,26 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2018-2021 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 import logging
+from typing import List, Tuple, cast
 
 from immutabledict import immutabledict
 
@@ -584,18 +592,21 @@ class StateStoreTestCase(HomeserverTestCase):
         )
 
         # check that only state events are in state_groups, and all state events are in state_groups
-        res = self.get_success(
-            self.store.db_pool.simple_select_list(
-                table="state_groups",
-                keyvalues=None,
-                retcols=("event_id",),
-            )
+        res = cast(
+            List[Tuple[str]],
+            self.get_success(
+                self.store.db_pool.simple_select_list(
+                    table="state_groups",
+                    keyvalues=None,
+                    retcols=("event_id",),
+                )
+            ),
         )
 
         events = []
         for result in res:
-            self.assertNotIn(event3.event_id, result)
-            events.append(result.get("event_id"))
+            self.assertNotIn(event3.event_id, result)  # XXX
+            events.append(result[0])
 
         for event, _ in processed_events_and_context:
             if event.is_state():
@@ -606,23 +617,29 @@ class StateStoreTestCase(HomeserverTestCase):
         # has an entry and prev event in state_group_edges
         for event, context in processed_events_and_context:
             if event.is_state():
-                state = self.get_success(
-                    self.store.db_pool.simple_select_list(
-                        table="state_groups_state",
-                        keyvalues={"state_group": context.state_group_after_event},
-                        retcols=("type", "state_key"),
-                    )
+                state = cast(
+                    List[Tuple[str, str]],
+                    self.get_success(
+                        self.store.db_pool.simple_select_list(
+                            table="state_groups_state",
+                            keyvalues={"state_group": context.state_group_after_event},
+                            retcols=("type", "state_key"),
+                        )
+                    ),
                 )
-                self.assertEqual(event.type, state[0].get("type"))
-                self.assertEqual(event.state_key, state[0].get("state_key"))
+                self.assertEqual(event.type, state[0][0])
+                self.assertEqual(event.state_key, state[0][1])
 
-                groups = self.get_success(
-                    self.store.db_pool.simple_select_list(
-                        table="state_group_edges",
-                        keyvalues={"state_group": str(context.state_group_after_event)},
-                        retcols=("*",),
-                    )
+                groups = cast(
+                    List[Tuple[str]],
+                    self.get_success(
+                        self.store.db_pool.simple_select_list(
+                            table="state_group_edges",
+                            keyvalues={
+                                "state_group": str(context.state_group_after_event)
+                            },
+                            retcols=("prev_state_group",),
+                        )
+                    ),
                 )
-                self.assertEqual(
-                    context.state_group_before_event, groups[0].get("prev_state_group")
-                )
+                self.assertEqual(context.state_group_before_event, groups[0][0])

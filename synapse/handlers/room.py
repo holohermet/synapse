@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2016-2021 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 
 """Contains functions for performing actions on rooms."""
 import itertools
@@ -20,7 +27,17 @@ import random
 import string
 from collections import OrderedDict
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    cast,
+)
 
 import attr
 from typing_extensions import TypedDict
@@ -134,7 +151,7 @@ class RoomCreationHandler:
                 "history_visibility": HistoryVisibility.SHARED,
                 "original_invitees_have_ops": False,
                 "guest_can_join": False,
-                "power_level_content_override": {},
+                "power_level_content_override": {EventTypes.CallInvite: 50},
             },
         }
 
@@ -261,7 +278,6 @@ class RoomCreationHandler:
                 # in the meantime and context needs to be recomputed, so let's do so.
                 if i == max_retries - 1:
                     raise e
-                pass
 
         # This is to satisfy mypy and should never happen
         raise PartialStateConflictError()
@@ -270,7 +286,7 @@ class RoomCreationHandler:
         self,
         requester: Requester,
         old_room_id: str,
-        old_room: Dict[str, Any],
+        old_room: Tuple[bool, str, bool],
         new_room_id: str,
         new_version: RoomVersion,
         tombstone_event: EventBase,
@@ -280,7 +296,7 @@ class RoomCreationHandler:
         Args:
             requester: the user requesting the upgrade
             old_room_id: the id of the room to be replaced
-            old_room: a dict containing room information for the room to be replaced,
+            old_room: a tuple containing room information for the room to be replaced,
                 as returned by `RoomWorkerStore.get_room`.
             new_room_id: the id of the replacement room
             new_version: the version to upgrade the room to
@@ -300,7 +316,7 @@ class RoomCreationHandler:
         await self.store.store_room(
             room_id=new_room_id,
             room_creator_user_id=user_id,
-            is_public=old_room["is_public"],
+            is_public=old_room[0],
             room_version=new_version,
         )
 
@@ -522,10 +538,10 @@ class RoomCreationHandler:
         # deep-copy the power-levels event before we start modifying it
         # note that if frozen_dicts are enabled, `power_levels` will be a frozen
         # dict so we can't just copy.deepcopy it.
-        initial_state[
-            (EventTypes.PowerLevels, "")
-        ] = power_levels = copy_and_fixup_power_levels_contents(
-            initial_state[(EventTypes.PowerLevels, "")]
+        initial_state[(EventTypes.PowerLevels, "")] = power_levels = (
+            copy_and_fixup_power_levels_contents(
+                initial_state[(EventTypes.PowerLevels, "")]
+            )
         )
 
         # Resolve the minimum power level required to send any state event
@@ -550,7 +566,7 @@ class RoomCreationHandler:
         except (TypeError, ValueError):
             ban = 50
         needed_power_level = max(
-            state_default_int, ban, max(event_power_levels.values())
+            state_default_int, ban, max(event_power_levels.values(), default=0)
         )
 
         # Get the user's current power level, this matches the logic in get_user_power_level,
@@ -699,6 +715,7 @@ class RoomCreationHandler:
         config: JsonDict,
         ratelimit: bool = True,
         creator_join_profile: Optional[JsonDict] = None,
+        ignore_forced_encryption: bool = False,
     ) -> Tuple[str, Optional[RoomAlias], int]:
         """Creates a new room.
 
@@ -715,6 +732,8 @@ class RoomCreationHandler:
                 derived from the user's profile. If set, should contain the
                 values to go in the body of the 'join' event (typically
                 `avatar_url` and/or `displayname`.
+            ignore_forced_encryption:
+                Ignore encryption forced by `encryption_enabled_by_default_for_room_type` setting.
 
         Returns:
             A 3-tuple containing:
@@ -900,10 +919,8 @@ class RoomCreationHandler:
             if not self.config.roomdirectory.is_publishing_room_allowed(
                 user_id, room_id, room_aliases
             ):
-                # Let's just return a generic message, as there may be all sorts of
-                # reasons why we said no. TODO: Allow configurable error messages
-                # per alias creation rule?
-                raise SynapseError(403, "Not allowed to publish room")
+                # allow room creation to continue but do not publish room
+                await self.store.set_room_is_public(room_id, False)
 
         directory_handler = self.hs.get_directory_handler()
         if room_alias:
@@ -1018,6 +1035,7 @@ class RoomCreationHandler:
         room_alias: Optional[RoomAlias] = None,
         power_level_content_override: Optional[JsonDict] = None,
         creator_join_profile: Optional[JsonDict] = None,
+        ignore_forced_encryption: bool = False,
     ) -> Tuple[int, str, int]:
         """Sends the initial events into a new room. Sends the room creation, membership,
         and power level events into the room sequentially, then creates and batches up the
@@ -1052,6 +1070,8 @@ class RoomCreationHandler:
             creator_join_profile:
                 Set to override the displayname and avatar for the creating
                 user in this room.
+            ignore_forced_encryption:
+                Ignore encryption forced by `encryption_enabled_by_default_for_room_type` setting.
 
         Returns:
             A tuple containing the stream ID, event ID and depth of the last
@@ -1255,7 +1275,7 @@ class RoomCreationHandler:
             )
             events_to_send.append((event, context))
 
-        if config["encrypted"]:
+        if config["encrypted"] and not ignore_forced_encryption:
             encryption_event, encryption_context = await create_event(
                 EventTypes.RoomEncryption,
                 {"algorithm": RoomEncryptionAlgorithms.DEFAULT},
@@ -1354,9 +1374,11 @@ class RoomCreationHandler:
         is_channel = room_config.get("is_channel", False)
         preset_name = room_config.get(
             "preset",
-            RoomCreationPreset.PRIVATE_CHAT
-            if visibility == "private"
-            else RoomCreationPreset.PUBLIC_CHAT,
+            (
+                RoomCreationPreset.PRIVATE_CHAT
+                if visibility == "private"
+                else RoomCreationPreset.PUBLIC_CHAT
+            ),
         )
         try:
             preset_config = self._presets_dict[preset_name]
@@ -1723,7 +1745,7 @@ class RoomEventSource(EventSource[RoomStreamToken, EventBase]):
 
         if from_key.topological:
             logger.warning("Stream has topological part!!!! %r", from_key)
-            from_key = RoomStreamToken(None, from_key.stream)
+            from_key = RoomStreamToken(stream=from_key.stream)
 
         app_service = self.store.get_app_service_by_user_id(user.to_string())
         if app_service:
@@ -1746,13 +1768,19 @@ class RoomEventSource(EventSource[RoomStreamToken, EventBase]):
             events = list(room_events)
             events.extend(e for evs, _ in room_to_events.values() for e in evs)
 
-            events.sort(key=lambda e: e.internal_metadata.order)
+            # We know stream_ordering must be not None here, as its been
+            # persisted, but mypy doesn't know that
+            events.sort(key=lambda e: cast(int, e.internal_metadata.stream_ordering))
 
             if limit:
                 events[:] = events[:limit]
 
             if events:
-                end_key = events[-1].internal_metadata.after
+                last_event = events[-1]
+                assert last_event.internal_metadata.stream_ordering
+                end_key = RoomStreamToken(
+                    stream=last_event.internal_metadata.stream_ordering,
+                )
             else:
                 end_key = to_key
 
@@ -1955,9 +1983,10 @@ class RoomShutdownHandler:
         else:
             logger.info("Shutting down room %r", room_id)
 
-        users = await self.store.get_users_in_room(room_id)
-        for user_id in users:
-            if not self.hs.is_mine_id(user_id):
+        users = await self.store.get_local_users_related_to_room(room_id)
+        for user_id, membership in users:
+            # If the user is not in the room (or is banned), nothing to do.
+            if membership not in (Membership.JOIN, Membership.INVITE, Membership.KNOCK):
                 continue
 
             logger.info("Kicking %r from %r...", user_id, room_id)

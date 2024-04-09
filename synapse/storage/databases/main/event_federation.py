@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2014-2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import datetime
 import itertools
 import logging
@@ -153,6 +160,13 @@ class EventFederationWorkerStore(SignatureWorkerStore, EventsWorkerStore, SQLBas
                 unique_columns=("event_id", "room_id"),
             )
 
+        self.db_pool.updates.register_background_index_update(
+            update_name="event_auth_chain_links_origin_index",
+            index_name="event_auth_chain_links_origin_index",
+            table="event_auth_chain_links",
+            columns=("origin_chain_id", "origin_sequence_number"),
+        )
+
     async def get_auth_chain(
         self, room_id: str, event_ids: Collection[str], include_given: bool = False
     ) -> List[EventBase]:
@@ -193,7 +207,8 @@ class EventFederationWorkerStore(SignatureWorkerStore, EventsWorkerStore, SQLBas
         # Check if we have indexed the room so we can use the chain cover
         # algorithm.
         room = await self.get_room(room_id)  # type: ignore[attr-defined]
-        if room["has_auth_chain_index"]:
+        # If the room has an auth chain index.
+        if room[1]:
             try:
                 return await self.db_pool.runInteraction(
                     "get_auth_chain_ids_chains",
@@ -264,23 +279,45 @@ class EventFederationWorkerStore(SignatureWorkerStore, EventsWorkerStore, SQLBas
 
         # Now we look up all links for the chains we have, adding chains that
         # are reachable from any event.
+        #
+        # This query is structured to first get all chain IDs reachable, and
+        # then pull out all links from those chains. This does pull out more
+        # rows than is strictly necessary, however there isn't a way of
+        # structuring the recursive part of query to pull out the links without
+        # also returning large quantities of redundant data (which can make it a
+        # lot slower).
         sql = """
+            WITH RECURSIVE links(chain_id) AS (
+                SELECT
+                    DISTINCT origin_chain_id
+                FROM event_auth_chain_links WHERE %s
+                UNION
+                SELECT
+                    target_chain_id
+                FROM event_auth_chain_links
+                INNER JOIN links ON (chain_id = origin_chain_id)
+            )
             SELECT
                 origin_chain_id, origin_sequence_number,
                 target_chain_id, target_sequence_number
-            FROM event_auth_chain_links
-            WHERE %s
+            FROM links
+            INNER JOIN event_auth_chain_links ON (chain_id = origin_chain_id)
         """
 
         # A map from chain ID to max sequence number *reachable* from any event ID.
         chains: Dict[int, int] = {}
 
         # Add all linked chains reachable from initial set of chains.
-        for batch2 in batch_iter(event_chains, 1000):
+        chains_to_fetch = set(event_chains.keys())
+        while chains_to_fetch:
+            batch2 = tuple(itertools.islice(chains_to_fetch, 1000))
+            chains_to_fetch.difference_update(batch2)
             clause, args = make_in_list_sql_clause(
                 txn.database_engine, "origin_chain_id", batch2
             )
             txn.execute(sql % (clause,), args)
+
+            links: Dict[int, List[Tuple[int, int, int]]] = {}
 
             for (
                 origin_chain_id,
@@ -288,18 +325,26 @@ class EventFederationWorkerStore(SignatureWorkerStore, EventsWorkerStore, SQLBas
                 target_chain_id,
                 target_sequence_number,
             ) in txn:
-                # chains are only reachable if the origin sequence number of
-                # the link is less than the max sequence number in the
-                # origin chain.
-                if origin_sequence_number <= event_chains.get(origin_chain_id, 0):
-                    chains[target_chain_id] = max(
-                        target_sequence_number,
-                        chains.get(target_chain_id, 0),
-                    )
+                links.setdefault(origin_chain_id, []).append(
+                    (origin_sequence_number, target_chain_id, target_sequence_number)
+                )
+
+            for chain_id in links:
+                if chain_id not in event_chains:
+                    continue
+
+                _materialize(chain_id, event_chains[chain_id], links, chains)
+
+            chains_to_fetch.difference_update(chains)
 
         # Add the initial set of chains, excluding the sequence corresponding to
         # initial event.
         for chain_id, seq_no in event_chains.items():
+            # Check if the initial event is the first item in the chain. If so, then
+            # there is nothing new to add from this chain.
+            if seq_no == 1:
+                continue
+
             chains[chain_id] = max(seq_no - 1, chains.get(chain_id, 0))
 
         # Now for each chain we figure out the maximum sequence number reachable
@@ -411,7 +456,8 @@ class EventFederationWorkerStore(SignatureWorkerStore, EventsWorkerStore, SQLBas
         # Check if we have indexed the room so we can use the chain cover
         # algorithm.
         room = await self.get_room(room_id)  # type: ignore[attr-defined]
-        if room["has_auth_chain_index"]:
+        # If the room has an auth chain index.
+        if room[1]:
             try:
                 return await self.db_pool.runInteraction(
                     "get_auth_chain_difference_chains",
@@ -516,23 +562,44 @@ class EventFederationWorkerStore(SignatureWorkerStore, EventsWorkerStore, SQLBas
 
                 chains[chain_id] = max(seq_no, chains.get(chain_id, 0))
 
-        # Now we look up all links for the chains we have, adding chains to
-        # set_to_chain that are reachable from each set.
+        # Now we look up all links for the chains we have, adding chains that
+        # are reachable from any event.
+        #
+        # This query is structured to first get all chain IDs reachable, and
+        # then pull out all links from those chains. This does pull out more
+        # rows than is strictly necessary, however there isn't a way of
+        # structuring the recursive part of query to pull out the links without
+        # also returning large quantities of redundant data (which can make it a
+        # lot slower).
         sql = """
+            WITH RECURSIVE links(chain_id) AS (
+                SELECT
+                    DISTINCT origin_chain_id
+                FROM event_auth_chain_links WHERE %s
+                UNION
+                SELECT
+                    target_chain_id
+                FROM event_auth_chain_links
+                INNER JOIN links ON (chain_id = origin_chain_id)
+            )
             SELECT
                 origin_chain_id, origin_sequence_number,
                 target_chain_id, target_sequence_number
-            FROM event_auth_chain_links
-            WHERE %s
+            FROM links
+            INNER JOIN event_auth_chain_links ON (chain_id = origin_chain_id)
         """
 
         # (We need to take a copy of `seen_chains` as we want to mutate it in
         # the loop)
-        for batch2 in batch_iter(set(seen_chains), 1000):
+        chains_to_fetch = set(seen_chains)
+        while chains_to_fetch:
+            batch2 = tuple(itertools.islice(chains_to_fetch, 1000))
             clause, args = make_in_list_sql_clause(
                 txn.database_engine, "origin_chain_id", batch2
             )
             txn.execute(sql % (clause,), args)
+
+            links: Dict[int, List[Tuple[int, int, int]]] = {}
 
             for (
                 origin_chain_id,
@@ -540,17 +607,19 @@ class EventFederationWorkerStore(SignatureWorkerStore, EventsWorkerStore, SQLBas
                 target_chain_id,
                 target_sequence_number,
             ) in txn:
-                for chains in set_to_chain:
-                    # chains are only reachable if the origin sequence number of
-                    # the link is less than the max sequence number in the
-                    # origin chain.
-                    if origin_sequence_number <= chains.get(origin_chain_id, 0):
-                        chains[target_chain_id] = max(
-                            target_sequence_number,
-                            chains.get(target_chain_id, 0),
-                        )
+                links.setdefault(origin_chain_id, []).append(
+                    (origin_sequence_number, target_chain_id, target_sequence_number)
+                )
 
-                seen_chains.add(target_chain_id)
+            for chains in set_to_chain:
+                for chain_id in links:
+                    if chain_id not in chains:
+                        continue
+
+                    _materialize(chain_id, chains[chain_id], links, chains)
+
+                chains_to_fetch.difference_update(chains)
+                seen_chains.update(chains)
 
         # Now for each chain we figure out the maximum sequence number reachable
         # from *any* state set and the minimum sequence number reachable from
@@ -1049,15 +1118,18 @@ class EventFederationWorkerStore(SignatureWorkerStore, EventsWorkerStore, SQLBas
         Args:
             event_ids: The event IDs to calculate the max depth of.
         """
-        rows = await self.db_pool.simple_select_many_batch(
-            table="events",
-            column="event_id",
-            iterable=event_ids,
-            retcols=(
-                "event_id",
-                "depth",
+        rows = cast(
+            List[Tuple[str, int]],
+            await self.db_pool.simple_select_many_batch(
+                table="events",
+                column="event_id",
+                iterable=event_ids,
+                retcols=(
+                    "event_id",
+                    "depth",
+                ),
+                desc="get_max_depth_of",
             ),
-            desc="get_max_depth_of",
         )
 
         if not rows:
@@ -1065,10 +1137,10 @@ class EventFederationWorkerStore(SignatureWorkerStore, EventsWorkerStore, SQLBas
         else:
             max_depth_event_id = ""
             current_max_depth = 0
-            for row in rows:
-                if row["depth"] > current_max_depth:
-                    max_depth_event_id = row["event_id"]
-                    current_max_depth = row["depth"]
+            for event_id, depth in rows:
+                if depth > current_max_depth:
+                    max_depth_event_id = event_id
+                    current_max_depth = depth
 
             return max_depth_event_id, current_max_depth
 
@@ -1078,15 +1150,18 @@ class EventFederationWorkerStore(SignatureWorkerStore, EventsWorkerStore, SQLBas
         Args:
             event_ids: The event IDs to calculate the max depth of.
         """
-        rows = await self.db_pool.simple_select_many_batch(
-            table="events",
-            column="event_id",
-            iterable=event_ids,
-            retcols=(
-                "event_id",
-                "depth",
+        rows = cast(
+            List[Tuple[str, int]],
+            await self.db_pool.simple_select_many_batch(
+                table="events",
+                column="event_id",
+                iterable=event_ids,
+                retcols=(
+                    "event_id",
+                    "depth",
+                ),
+                desc="get_min_depth_of",
             ),
-            desc="get_min_depth_of",
         )
 
         if not rows:
@@ -1094,10 +1169,10 @@ class EventFederationWorkerStore(SignatureWorkerStore, EventsWorkerStore, SQLBas
         else:
             min_depth_event_id = ""
             current_min_depth = MAX_DEPTH
-            for row in rows:
-                if row["depth"] < current_min_depth:
-                    min_depth_event_id = row["event_id"]
-                    current_min_depth = row["depth"]
+            for event_id, depth in rows:
+                if depth < current_min_depth:
+                    min_depth_event_id = event_id
+                    current_min_depth = depth
 
             return min_depth_event_id, current_min_depth
 
@@ -1431,24 +1506,18 @@ class EventFederationWorkerStore(SignatureWorkerStore, EventsWorkerStore, SQLBas
             )
 
             if event_lookup_result is not None:
+                event_type, depth, stream_ordering = event_lookup_result
                 logger.debug(
                     "_get_backfill_events(room_id=%s): seed_event_id=%s depth=%s stream_ordering=%s type=%s",
                     room_id,
                     seed_event_id,
-                    event_lookup_result["depth"],
-                    event_lookup_result["stream_ordering"],
-                    event_lookup_result["type"],
+                    depth,
+                    stream_ordering,
+                    event_type,
                 )
 
-                if event_lookup_result["depth"]:
-                    queue.put(
-                        (
-                            -event_lookup_result["depth"],
-                            -event_lookup_result["stream_ordering"],
-                            seed_event_id,
-                            event_lookup_result["type"],
-                        )
-                    )
+                if depth:
+                    queue.put((-depth, -stream_ordering, seed_event_id, event_type))
 
         while not queue.empty() and len(event_id_results) < limit:
             try:
@@ -1553,19 +1622,18 @@ class EventFederationWorkerStore(SignatureWorkerStore, EventsWorkerStore, SQLBas
             A filtered down list of `event_ids` that have previous failed pull attempts.
         """
 
-        rows = await self.db_pool.simple_select_many_batch(
-            table="event_failed_pull_attempts",
-            column="event_id",
-            iterable=event_ids,
-            keyvalues={},
-            retcols=("event_id",),
-            desc="get_event_ids_with_failed_pull_attempts",
+        rows = cast(
+            List[Tuple[str]],
+            await self.db_pool.simple_select_many_batch(
+                table="event_failed_pull_attempts",
+                column="event_id",
+                iterable=event_ids,
+                keyvalues={},
+                retcols=("event_id",),
+                desc="get_event_ids_with_failed_pull_attempts",
+            ),
         )
-        event_ids_with_failed_pull_attempts: Set[str] = {
-            row["event_id"] for row in rows
-        }
-
-        return event_ids_with_failed_pull_attempts
+        return {row[0] for row in rows}
 
     @trace
     async def get_event_ids_to_not_pull_from_backoff(
@@ -1585,32 +1653,34 @@ class EventFederationWorkerStore(SignatureWorkerStore, EventsWorkerStore, SQLBas
             A dictionary of event_ids that should not be attempted to be pulled and the
             next timestamp at which we may try pulling them again.
         """
-        event_failed_pull_attempts = await self.db_pool.simple_select_many_batch(
-            table="event_failed_pull_attempts",
-            column="event_id",
-            iterable=event_ids,
-            keyvalues={},
-            retcols=(
-                "event_id",
-                "last_attempt_ts",
-                "num_attempts",
+        event_failed_pull_attempts = cast(
+            List[Tuple[str, int, int]],
+            await self.db_pool.simple_select_many_batch(
+                table="event_failed_pull_attempts",
+                column="event_id",
+                iterable=event_ids,
+                keyvalues={},
+                retcols=(
+                    "event_id",
+                    "last_attempt_ts",
+                    "num_attempts",
+                ),
+                desc="get_event_ids_to_not_pull_from_backoff",
             ),
-            desc="get_event_ids_to_not_pull_from_backoff",
         )
 
         current_time = self._clock.time_msec()
 
         event_ids_with_backoff = {}
-        for event_failed_pull_attempt in event_failed_pull_attempts:
-            event_id = event_failed_pull_attempt["event_id"]
+        for event_id, last_attempt_ts, num_attempts in event_failed_pull_attempts:
             # Exponential back-off (up to the upper bound) so we don't try to
             # pull the same event over and over. ex. 2hr, 4hr, 8hr, 16hr, etc.
             backoff_end_time = (
-                event_failed_pull_attempt["last_attempt_ts"]
+                last_attempt_ts
                 + (
                     2
                     ** min(
-                        event_failed_pull_attempt["num_attempts"],
+                        num_attempts,
                         BACKFILL_EVENT_EXPONENTIAL_BACKOFF_MAXIMUM_DOUBLING_STEPS,
                     )
                 )
@@ -1891,21 +1961,23 @@ class EventFederationWorkerStore(SignatureWorkerStore, EventsWorkerStore, SQLBas
         # keeping only the forward extremities (i.e. the events not referenced
         # by other events in the queue). We do this so that we can always
         # backpaginate in all the events we have dropped.
-        rows = await self.db_pool.simple_select_list(
-            table="federation_inbound_events_staging",
-            keyvalues={"room_id": room_id},
-            retcols=("event_id", "event_json"),
-            desc="prune_staged_events_in_room_fetch",
+        rows = cast(
+            List[Tuple[str, str]],
+            await self.db_pool.simple_select_list(
+                table="federation_inbound_events_staging",
+                keyvalues={"room_id": room_id},
+                retcols=("event_id", "event_json"),
+                desc="prune_staged_events_in_room_fetch",
+            ),
         )
 
         # Find the set of events referenced by those in the queue, as well as
         # collecting all the event IDs in the queue.
         referenced_events: Set[str] = set()
         seen_events: Set[str] = set()
-        for row in rows:
-            event_id = row["event_id"]
+        for event_id, event_json in rows:
             seen_events.add(event_id)
-            event_d = db_to_json(row["event_json"])
+            event_d = db_to_json(event_json)
 
             # We don't bother parsing the dicts into full blown event objects,
             # as that is needlessly expensive.
@@ -2087,3 +2159,49 @@ class EventFederationStore(EventFederationWorkerStore):
             )
 
         return batch_size
+
+
+def _materialize(
+    origin_chain_id: int,
+    origin_sequence_number: int,
+    links: Dict[int, List[Tuple[int, int, int]]],
+    materialized: Dict[int, int],
+) -> None:
+    """Helper function for fetching auth chain links. For a given origin chain
+    ID / sequence number and a dictionary of links, updates the materialized
+    dict with the reachable chains.
+
+    To get a dict of all chains reachable from a set of chains this function can
+    be called in a loop, once per origin chain with the same links and
+    materialized args. The materialized dict will the result.
+
+    Args:
+        origin_chain_id, origin_sequence_number
+        links: map of the links between chains as a dict from origin chain ID
+            to list of 3-tuples of origin sequence number, target chain ID and
+            target sequence number.
+        materialized: dict to update with new reachability information, as a
+            map from chain ID to max sequence number reachable.
+    """
+
+    # Do a standard graph traversal.
+    stack = [(origin_chain_id, origin_sequence_number)]
+
+    while stack:
+        c, s = stack.pop()
+
+        chain_links = links.get(c, [])
+        for (
+            sequence_number,
+            target_chain_id,
+            target_sequence_number,
+        ) in chain_links:
+            # Ignore any links that are higher up the chain
+            if sequence_number > s:
+                continue
+
+            # Check if we have already visited the target chain before, if so we
+            # can skip it.
+            if materialized.get(target_chain_id, 0) < target_sequence_number:
+                stack.append((target_chain_id, target_sequence_number))
+                materialized[target_chain_id] = target_sequence_number

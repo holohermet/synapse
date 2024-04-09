@@ -1,22 +1,31 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2019 The Matrix.org Foundation C.I.C.
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import hashlib
 import hmac
 import logging
 import secrets
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
+
+import attr
 
 from synapse.api.constants import Direction, UserTypes
 from synapse.api.errors import Codes, NotFoundError, SynapseError
@@ -99,7 +108,7 @@ class UsersRestServletV2(RestServlet):
             )
 
         user_id = parse_string(request, "user_id")
-        name = parse_string(request, "name")
+        name = parse_string(request, "name", encoding="utf-8")
 
         guests = parse_boolean(request, "guests", default=True)
         if self._msc3861_enabled and guests:
@@ -109,7 +118,8 @@ class UsersRestServletV2(RestServlet):
                 errcode=Codes.INVALID_PARAM,
             )
 
-        deactivated = parse_boolean(request, "deactivated", default=False)
+        deactivated = self._parse_parameter_deactivated(request)
+
         locked = parse_boolean(request, "locked", default=False)
         admins = parse_boolean(request, "admins")
 
@@ -161,15 +171,33 @@ class UsersRestServletV2(RestServlet):
         )
 
         # If support for MSC3866 is not enabled, don't show the approval flag.
+        filter = None
         if not self._msc3866_enabled:
-            for user in users:
-                del user["approved"]
 
-        ret = {"users": users, "total": total}
+            def _filter(a: attr.Attribute) -> bool:
+                return a.name != "approved"
+
+        ret = {"users": [attr.asdict(u, filter=filter) for u in users], "total": total}
         if (start + limit) < total:
             ret["next_token"] = str(start + len(users))
 
         return HTTPStatus.OK, ret
+
+    def _parse_parameter_deactivated(self, request: SynapseRequest) -> Optional[bool]:
+        """
+        Return None (no filtering) if `deactivated` is `true`, otherwise return `False`
+        (exclude deactivated users from the results).
+        """
+        return None if parse_boolean(request, "deactivated") else False
+
+
+class UsersRestServletV3(UsersRestServletV2):
+    PATTERNS = admin_patterns("/users$", "v3")
+
+    def _parse_parameter_deactivated(
+        self, request: SynapseRequest
+    ) -> Union[bool, None]:
+        return parse_boolean(request, "deactivated")
 
 
 class UserRestServletV2(RestServlet):
@@ -329,9 +357,8 @@ class UserRestServletV2(RestServlet):
 
             if threepids is not None:
                 # get changed threepids (added and removed)
-                # convert List[Dict[str, Any]] into Set[Tuple[str, str]]
                 cur_threepids = {
-                    (threepid["medium"], threepid["address"])
+                    (threepid.medium, threepid.address)
                     for threepid in await self.store.user_get_threepids(user_id)
                 }
                 add_threepids = new_threepids - cur_threepids
@@ -403,15 +430,6 @@ class UserRestServletV2(RestServlet):
                         target_user.to_string(), False, requester, by_admin=True
                     )
                 elif not deactivate and user["deactivated"]:
-                    if (
-                        "password" not in body
-                        and self.auth_handler.can_change_password()
-                    ):
-                        raise SynapseError(
-                            HTTPStatus.BAD_REQUEST,
-                            "Must provide a password to re-activate an account.",
-                        )
-
                     await self.deactivate_account_handler.activate_account(
                         target_user.to_string()
                     )
@@ -627,6 +645,12 @@ class UserRegisterServlet(RestServlet):
         if not hmac.compare_digest(want_mac.encode("ascii"), got_mac.encode("ascii")):
             raise SynapseError(HTTPStatus.FORBIDDEN, "HMAC incorrect")
 
+        should_issue_refresh_token = body.get("refresh_token", False)
+        if not isinstance(should_issue_refresh_token, bool):
+            raise SynapseError(
+                HTTPStatus.BAD_REQUEST, "refresh_token must be a boolean"
+            )
+
         # Reuse the parts of RegisterRestServlet to reduce code duplication
         from synapse.rest.client.register import RegisterRestServlet
 
@@ -642,7 +666,9 @@ class UserRegisterServlet(RestServlet):
             approved=True,
         )
 
-        result = await register._create_registration_details(user_id, body)
+        result = await register._create_registration_details(
+            user_id, body, should_issue_refresh_token=should_issue_refresh_token
+        )
         return HTTPStatus.OK, result
 
 
@@ -842,7 +868,18 @@ class SearchUsersRestServlet(RestServlet):
         logger.info("term: %s ", term)
 
         ret = await self.store.search_users(term)
-        return HTTPStatus.OK, ret
+        results = [
+            {
+                "name": name,
+                "password_hash": password_hash,
+                "is_guest": bool(is_guest),
+                "admin": bool(admin),
+                "user_type": user_type,
+            }
+            for name, password_hash, is_guest, admin, user_type in ret
+        ]
+
+        return HTTPStatus.OK, results
 
 
 class UserAdminServlet(RestServlet):
@@ -1147,12 +1184,14 @@ class RateLimitRestServlet(RestServlet):
             # convert `null` to `0` for consistency
             # both values do the same in retelimit handler
             ret = {
-                "messages_per_second": 0
-                if ratelimit.messages_per_second is None
-                else ratelimit.messages_per_second,
-                "burst_count": 0
-                if ratelimit.burst_count is None
-                else ratelimit.burst_count,
+                "messages_per_second": (
+                    0
+                    if ratelimit.messages_per_second is None
+                    else ratelimit.messages_per_second
+                ),
+                "burst_count": (
+                    0 if ratelimit.burst_count is None else ratelimit.burst_count
+                ),
             }
         else:
             ret = {}
@@ -1254,6 +1293,46 @@ class AccountDataRestServlet(RestServlet):
                 "rooms": by_room_data,
             },
         }
+
+
+class UserReplaceMasterCrossSigningKeyRestServlet(RestServlet):
+    """Allow a given user to replace their master cross-signing key without UIA.
+
+    This replacement is permitted for a limited period (currently 10 minutes).
+
+    While this is exposed via the admin API, this is intended for use by the
+    Matrix Authentication Service rather than server admins.
+    """
+
+    PATTERNS = admin_patterns(
+        "/users/(?P<user_id>[^/]*)/_allow_cross_signing_replacement_without_uia"
+    )
+    REPLACEMENT_PERIOD_MS = 10 * 60 * 1000  # 10 minutes
+
+    def __init__(self, hs: "HomeServer"):
+        self._auth = hs.get_auth()
+        self._store = hs.get_datastores().main
+
+    async def on_POST(
+        self,
+        request: SynapseRequest,
+        user_id: str,
+    ) -> Tuple[int, JsonDict]:
+        await assert_requester_is_admin(self._auth, request)
+
+        if user_id is None:
+            raise NotFoundError("User not found")
+
+        timestamp = (
+            await self._store.allow_master_cross_signing_key_replacement_without_uia(
+                user_id, self.REPLACEMENT_PERIOD_MS
+            )
+        )
+
+        if timestamp is None:
+            raise NotFoundError("User has no master cross-signing key")
+
+        return HTTPStatus.OK, {"updatable_without_uia_before_ms": timestamp}
 
 
 class UserByExternalId(RestServlet):

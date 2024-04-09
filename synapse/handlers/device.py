@@ -1,30 +1,26 @@
-# Copyright 2016 OpenMarket Ltd
-# Copyright 2019 New Vector Ltd
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2019,2020 The Matrix.org Foundation C.I.C.
+# Copyright 2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import logging
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    Iterable,
-    List,
-    Mapping,
-    Optional,
-    Set,
-    Tuple,
-)
+from typing import TYPE_CHECKING, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from synapse.api import errors
 from synapse.api.constants import EduTypes, EventTypes
@@ -41,6 +37,7 @@ from synapse.metrics.background_process_metrics import (
     run_as_background_process,
     wrap_as_background_process,
 )
+from synapse.storage.databases.main.client_ips import DeviceLastConnectionInfo
 from synapse.types import (
     JsonDict,
     JsonMapping,
@@ -337,6 +334,9 @@ class DeviceWorkerHandler:
         return result
 
     async def on_federation_query_user_devices(self, user_id: str) -> JsonDict:
+        if not self.hs.is_mine(UserID.from_string(user_id)):
+            raise SynapseError(400, "User is not hosted on this homeserver")
+
         stream_id, devices = await self.store.get_e2e_device_keys_for_federation_query(
             user_id
         )
@@ -389,7 +389,7 @@ class DeviceWorkerHandler:
         )
 
     DEVICE_MSGS_DELETE_BATCH_LIMIT = 1000
-    DEVICE_MSGS_DELETE_SLEEP_MS = 1000
+    DEVICE_MSGS_DELETE_SLEEP_MS = 100
 
     async def _delete_device_messages(
         self,
@@ -402,15 +402,17 @@ class DeviceWorkerHandler:
         up_to_stream_id = task.params["up_to_stream_id"]
 
         # Delete the messages in batches to avoid too much DB load.
+        from_stream_id = None
         while True:
-            res = await self.store.delete_messages_for_device(
+            from_stream_id, _ = await self.store.delete_messages_for_device_between(
                 user_id=user_id,
                 device_id=device_id,
-                up_to_stream_id=up_to_stream_id,
+                from_stream_id=from_stream_id,
+                to_stream_id=up_to_stream_id,
                 limit=DeviceHandler.DEVICE_MSGS_DELETE_BATCH_LIMIT,
             )
 
-            if res < DeviceHandler.DEVICE_MSGS_DELETE_BATCH_LIMIT:
+            if from_stream_id is None:
                 return TaskStatus.COMPLETE, None, None
 
             await self.clock.sleep(DeviceHandler.DEVICE_MSGS_DELETE_SLEEP_MS / 1000.0)
@@ -426,6 +428,10 @@ class DeviceHandler(DeviceWorkerHandler):
         self._account_data_handler = hs.get_account_data_handler()
         self._storage_controllers = hs.get_storage_controllers()
         self.db_pool = hs.get_datastores().main.db_pool
+
+        self._dont_notify_new_devices_for = (
+            hs.config.registration.dont_notify_new_devices_for
+        )
 
         self.device_list_updater = DeviceListUpdater(hs, self)
 
@@ -503,6 +509,9 @@ class DeviceHandler(DeviceWorkerHandler):
 
         self._check_device_name_length(initial_device_display_name)
 
+        # Check if we should send out device lists updates for this new device.
+        notify = user_id not in self._dont_notify_new_devices_for
+
         if device_id is not None:
             new_device = await self.store.store_device(
                 user_id=user_id,
@@ -512,7 +521,8 @@ class DeviceHandler(DeviceWorkerHandler):
                 auth_provider_session_id=auth_provider_session_id,
             )
             if new_device:
-                await self.notify_device_update(user_id, [device_id])
+                if notify:
+                    await self.notify_device_update(user_id, [device_id])
             return device_id
 
         # if the device id is not specified, we'll autogen one, but loop a few
@@ -528,7 +538,8 @@ class DeviceHandler(DeviceWorkerHandler):
                 auth_provider_session_id=auth_provider_session_id,
             )
             if new_device:
-                await self.notify_device_update(user_id, [new_device_id])
+                if notify:
+                    await self.notify_device_update(user_id, [new_device_id])
                 return new_device_id
             attempts += 1
 
@@ -601,6 +612,8 @@ class DeviceHandler(DeviceWorkerHandler):
                 )
 
             # Delete device messages asynchronously and in batches using the task scheduler
+            # We specify an upper stream id to avoid deleting non delivered messages
+            # if an user re-uses a device ID.
             await self._task_scheduler.schedule_task(
                 DELETE_DEVICE_MSGS_TASK_NAME,
                 resource_id=device_id,
@@ -845,7 +858,6 @@ class DeviceHandler(DeviceWorkerHandler):
                     else:
                         assert max_stream_id == stream_id
                         # Avoid moving `room_id` backwards.
-                        pass
 
                     if self._handle_new_device_update_new_data:
                         continue
@@ -1009,14 +1021,14 @@ class DeviceHandler(DeviceWorkerHandler):
 
 
 def _update_device_from_client_ips(
-    device: JsonDict, client_ips: Mapping[Tuple[str, str], Mapping[str, Any]]
+    device: JsonDict, client_ips: Mapping[Tuple[str, str], DeviceLastConnectionInfo]
 ) -> None:
-    ip = client_ips.get((device["user_id"], device["device_id"]), {})
+    ip = client_ips.get((device["user_id"], device["device_id"]))
     device.update(
         {
-            "last_seen_user_agent": ip.get("user_agent"),
-            "last_seen_ts": ip.get("last_seen"),
-            "last_seen_ip": ip.get("ip"),
+            "last_seen_user_agent": ip.user_agent if ip else None,
+            "last_seen_ts": ip.last_seen if ip else None,
+            "last_seen_ip": ip.ip if ip else None,
         }
     )
 

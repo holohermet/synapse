@@ -1,16 +1,23 @@
+#
+# This file is licensed under the Affero General Public License (AGPL) version 3.
+#
 # Copyright 2015, 2016 OpenMarket Ltd
+# Copyright (C) 2023 New Vector, Ltd
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# See the GNU Affero General Public License for more details:
+# <https://www.gnu.org/licenses/agpl-3.0.html>.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Originally licensed under the Apache License, Version 2.0:
+# <http://www.apache.org/licenses/LICENSE-2.0>.
+#
+# [This file includes modifications made by New Vector Limited]
+#
+#
 import logging
 import random
 from types import TracebackType
@@ -170,10 +177,10 @@ class RetryDestinationLimiter:
                 database in milliseconds, or zero if the last request was
                 successful.
             backoff_on_404: Back off if we get a 404
-
             backoff_on_failure: set to False if we should not increase the
                 retry interval on a failure.
-
+            notifier: A notifier used to mark servers as up.
+            replication_client A replication client used to mark servers as up.
             backoff_on_all_error_codes: Whether we should back off on any
                 error code.
         """
@@ -237,6 +244,9 @@ class RetryDestinationLimiter:
             else:
                 valid_err_code = False
 
+        # Whether previous requests to the destination had been failing.
+        previously_failing = bool(self.failure_ts)
+
         if success:
             # We connected successfully.
             if not self.retry_interval:
@@ -282,6 +292,9 @@ class RetryDestinationLimiter:
             if self.failure_ts is None:
                 self.failure_ts = retry_last_ts
 
+        # Whether the current request to the destination had been failing.
+        currently_failing = bool(self.failure_ts)
+
         async def store_retry_timings() -> None:
             try:
                 await self.store.set_destination_retry_timings(
@@ -291,17 +304,15 @@ class RetryDestinationLimiter:
                     self.retry_interval,
                 )
 
-                if self.notifier:
-                    # Inform the relevant places that the remote server is back up.
-                    self.notifier.notify_remote_server_up(self.destination)
+                # If the server was previously failing, but is no longer.
+                if previously_failing and not currently_failing:
+                    if self.notifier:
+                        # Inform the relevant places that the remote server is back up.
+                        self.notifier.notify_remote_server_up(self.destination)
 
-                if self.replication_client:
-                    # If we're on a worker we try and inform master about this. The
-                    # replication client doesn't hook into the notifier to avoid
-                    # infinite loops where we send a `REMOTE_SERVER_UP` command to
-                    # master, which then echoes it back to us which in turn pokes
-                    # the notifier.
-                    self.replication_client.send_remote_server_up(self.destination)
+                    if self.replication_client:
+                        # Inform other workers that the remote server is up.
+                        self.replication_client.send_remote_server_up(self.destination)
 
             except Exception:
                 logger.exception("Failed to store destination_retry_timings")
